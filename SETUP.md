@@ -52,3 +52,24 @@ Application's own `setup.bat` or `setup.ps1` separately after root setup. Those
 scripts own local templates and user-file preservation and should check existing
 platform prerequisites; they do not invoke root setup. Platform checkouts need
 no Application source to provision tools.
+
+## AI Buddy development status
+
+This repository does **not** yet contain an AI Buddy AppPack, separate
+application setup scripts or a runnable AI Buddy launcher. Root setup
+provisions Tertalis platform internals only. Completing it does not
+install, configure or launch an AI assistant.
+
+For platform development, after root setup run:
+
+```powershell
+.\python-embedded\python.exe -X frozen_modules=off -m pytest tests
+.\python-embedded\python.exe -X frozen_modules=off .\scripts\verify_tools.py
+```
+
+These are commands, not claims that the newly migrated repository's tests
+were run. See [README.md](README.md) for the workstream's present status
+and [AGENTS.md](AGENTS.md) for the canonical development coordination
+protocol. The copied `ai-workflow/` files are historical snapshots;
+the authoritative coordination ref remains
+`EnterTheNameHere/Turnix` branch `actant-integration`.
