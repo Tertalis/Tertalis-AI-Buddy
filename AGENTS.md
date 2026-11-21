@@ -10,9 +10,9 @@ files as independent authority.
 1. Read [README.md](README.md) for actual implementation status and
    [SETUP.md](SETUP.md) for repository-local Windows setup.
 2. Read the canonical
-   [coordination index](https://github.com/EnterTheNameHere/Turnix/blob/actant-integration/ai-workflow/index.txt)
+   [coordination index](https://github.com/Tertalis/Tertalis/blob/integration/ai-workflow/index.txt)
    and
-   [protocol](https://github.com/EnterTheNameHere/Turnix/blob/actant-integration/ai-workflow/coordination-protocol.txt).
+   [protocol](https://github.com/Tertalis/Tertalis/blob/integration/ai-workflow/coordination-protocol.txt).
 3. On that same canonical ref, read
    `ai-workflow/handoff/ai-buddy-thread.txt`,
    `ai-workflow/state/ai-buddy.txt`, current assignment and inbox
@@ -53,3 +53,16 @@ implementation. Root setup must never be modified to discover and initialize
 applications. There is no separate AI Buddy setup/launcher yet.
 Report the exact refs, actual tests performed and unverified conditions.
 Follow the canonical coordination handoff/completion protocol.
+
+## Shared ai-workflow boundary
+
+Every assistant, implementer, integrator, coordinator and design thread must
+read the current canonical ai-workflow instructions at
+[Tertalis/Tertalis integration](https://github.com/Tertalis/Tertalis/blob/integration/ai-workflow/index.txt)
+before working. This repository's `ai-workflow/index.txt` is only a local
+routing stub; its `integration` branch is the application's development
+branch, not a coordination authority. All operational inboxes, messages,
+workstream state and repository-location registry are maintained only in
+`Tertalis/Tertalis` on `integration`. Do not create a local inbox or rely
+on copied historical mail. For other applications, consult Tertalis's
+canonical registry rather than recording their addresses here.
