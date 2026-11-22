@@ -72,4 +72,4 @@ were run. See [README.md](README.md) for the workstream's present status
 and [AGENTS.md](AGENTS.md) for the canonical development coordination
 protocol. The copied `ai-workflow/` files are historical snapshots;
 the authoritative coordination ref remains
-`EnterTheNameHere/Turnix` branch `actant-integration`.
+`Tertalis/Tertalis` branch `integration`.
