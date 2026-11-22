@@ -59,8 +59,8 @@ uncoordinated model/resource authority.
 
 This repository participates in Tertalis's single cooperative
 cross-repository coordination system. The canonical file-based inbox
-and state currently reside on the `actant-integration` branch of
-[EnterTheNameHere/Turnix](https://github.com/EnterTheNameHere/Turnix/tree/actant-integration).
+and state currently reside on the `integration` branch of
+[EnterTheNameHere/Turnix](https://github.com/Tertalis/Tertalis/tree/integration).
 The `ai-workflow/` files inherited into this repository are historical
 snapshots, **not** a separately active coordination service. Consult
 the canonical AI Buddy handoff and workstream state there before taking
