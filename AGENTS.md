@@ -32,9 +32,9 @@ files as independent authority.
   shared Integration workstream rather than patched by creating a
   competing local platform.
 - A new repository does not establish a new Coordinator or independent
-  inbox. The authoritative file-based coordination system remains on
-  `EnterTheNameHere/Turnix`, ref `actant-integration`, until an
-  explicitly approved cutover.
+  inbox. The authoritative file-backed coordination system is on
+  `Tertalis/Tertalis`, ref `integration`. A future GitHub-native
+  coordination mirror remains secondary until an approved cutover.
 - Preserve accepted platform revisions until an authorized Integrator
   has verified a replacement. Do not overwrite shared history,
   delete branches or perform destructive tests without authorization.
