@@ -17,8 +17,8 @@ files as independent authority.
    `ai-workflow/handoff/ai-buddy-thread.txt`,
    `ai-workflow/state/ai-buddy.txt`, current assignment and inbox
    before making an ownership claim or implementation change.
-4. Read relevant existing `docs/` and `design/` contracts, but
-   recognize that some historical documents and coordination snapshots
+4. Read relevant current `docs/` and `design/` contracts in
+   `Tertalis/Tertalis` `integration`, but recognize that some historical documents and coordination snapshots
    still use the earlier Turnix/Actant terminology. They are not
    necessarily authoritative over newer canonical platform design.
 
@@ -58,8 +58,8 @@ Follow the canonical coordination handoff/completion protocol.
 
 For Tertalis platform contracts and design, consult the CURRENT
 `Tertalis/Tertalis` `integration` `design/index.txt` and relevant
-authoritative platform design/docs, not this Application checkout's
-possibly older copied `design/` or `docs/` files. Retrieve only the
+authoritative platform design/docs, because this Application does not carry copied root `design/`
+or `docs/` trees. Retrieve only the
 areas pertinent to the assigned task and its dependencies; do not load
 the entire design corpus by default. Current documentation does NOT
 authorize upgrading this Application's accepted Tertalis source SHA.
