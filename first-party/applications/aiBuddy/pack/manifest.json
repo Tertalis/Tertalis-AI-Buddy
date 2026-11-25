@@ -1,0 +1,8 @@
+{
+  "packId": "aiBuddy",
+  "kind": "appPack",
+  "version": "0.1.0",
+  "codeEntries": [
+    {"id": "buddy", "source": "codeEntry.py"}
+  ]
+}

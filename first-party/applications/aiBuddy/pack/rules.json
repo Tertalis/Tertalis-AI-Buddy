@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {
+      "text": "In Minesweeper a hidden cell is unknown, not a mine. Treat a hidden cell as a mine only when the revealed numbers around it prove it, and flag only such cells.",
+      "scope": "minesweeper",
+      "editable": false
+    }
+  ]
+}

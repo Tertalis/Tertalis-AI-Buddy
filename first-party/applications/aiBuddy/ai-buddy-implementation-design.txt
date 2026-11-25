@@ -1,0 +1,346 @@
+AI BUDDY - IMPLEMENTATION DESIGN
+Version 1.0 | 2026-11-25
+
+Companion to the AI Buddy conceptual design, initial materialization
+requirements and handoff. This document records how the initial
+materialization scope (requirements Stages 1-6, checkpoints A-F) is
+implemented on Tertalis and why. It records design, not status: platform
+gaps, workflow state and defects are tracked in the coordination records.
+
+01. STRUCTURE
+
+01.01. AppPack (first-party/applications/aiBuddy/pack): one CodeEntry
+       (codeEntry.py) holding all AI Buddy semantics, the authoritative
+       initial personality (personality.json) and initial rules
+       (rules.json). One module, because PackLoader loads one source per
+       CodeEntry.
+01.02. Host driver (host/driver.py): sequences capabilities as Tertalis
+       Jobs, holds debugger state and delivers committed speech. It carries
+       no AI Buddy semantics. It exists in host code because Tertalis has no
+       long-lived application scheduler: lifecycle hook Contexts end when
+       the hook returns. Exactly one thread calls the ApplicationRuntime;
+       other threads only enqueue commands or request cancellation of the
+       running Job.
+01.03. Launcher (run.py, run.bat): RuntimeHost with the llama.cpp driver
+       Pack in external mode and the AI Buddy AppPack; terminal input,
+       developer commands, saves under local/.
+01.04. Tests (tests/first_party/applications/aiBuddy): runtime contracts
+       with a scripted stub provider Pack; conftest.py holds the harness
+       (controllable clock, breakpoint and response-pause capture) and
+       exposes the CodeEntry's pure functions, e.g. the game engine. They
+       verify mechanics, never model behaviour.
+
+02. STATE
+
+02.01. All AI Buddy state lives in the Application's committed Value System
+       root under aibuddy/ and is persisted by SaveBundle generations.
+       Every mutating capability runs as one Job; its writes count only
+       when the Job commits. Schema: aibuddy.state@5.
+02.02. Layout: meta (schema, migrations); lifecycle; personality;
+       experiences/eNNNNNN; memories/mNNNNNN; situation/sNNNNNN (State
+       information); work/wNNNNNN and work/open; inferences/iNNNNNN;
+       outbox/oNNNNNN and outbox/delivered; games/gNNNNNN; rules/rNNNNNN;
+       passive/cursor. Each collection has a sequence counter, because the
+       Value System cannot enumerate addresses.
+02.03. Migrations run step by step in onApplicationLoad, add empty
+       collections (and, for rules, seed the initial rules) and record
+       themselves in meta. Existing records are never rewritten; readers
+       apply defaults for fields that earlier schemas lacked.
+02.04. Diagnostic records (inferences) are separate from personal memory
+       material (experiences, memories) but linked by identifiers, so
+       provenance can be followed without retrieving diagnostics as memory.
+
+03. INFERENCE CYCLE
+
+03.01. Three Jobs per inference: prepare (select work, build a fresh
+       prompt, record a "prepared" inference), execute (call the model,
+       commit the raw output as "generated") and process (act on the
+       output). Nothing in an output is acted on before processing.
+03.02. Breakpoint mode pauses at two committed boundaries: before execute
+       (prompt can be shown and replaced) and before process (response can
+       be shown and replaced). Replacements are recorded interventions; the
+       built prompt and the model's own output are kept.
+03.03. A prepared or generated inference is offered again unchanged after a
+       pause or restart; a generated one is processed without asking the
+       model again.
+03.04. Provider failures are recorded as a failed inference and failed
+       thing to do; the loop continues. A Job that does not succeed pauses
+       the driver so it cannot hot-loop. Every capability is registered
+       through a guard that aborts transactions it opened if it raises, so
+       a rejected request fails its own Job cleanly.
+03.05. Cancellation applies only to execution. A developer interrupt leaves
+       the inference prepared and pauses. Under the "cancel" input policy
+       (08.08) the partial output, collected in a caller-owned list that
+       survives the cancelled Job, is recorded by a separate Job.
+03.06. Speech is delivered only from the committed outbox, after the
+       producing Job commits, and acknowledged afterwards. Speech delivered
+       just before a crash may be delivered again after restore.
+
+04. OUTPUT CONTRACT (aibuddy.result.tags@6, provisional)
+
+04.01. Actions are closed tags in the response: say, remember, recall,
+       continue, intend, rest, activity, stop, choose, reveal, flag, unflag,
+       rule, revise, reorder, retire, disregard, react, candidate.
+       Everything else is thinking. Tags inside <think> are not actions;
+       unclosed tags are never acted on and produce warnings. continue,
+       stop and rest may be empty. Game moves keep their textual order.
+04.02. Each prompt offers only the actions available in that situation, and
+       processing enforces the same availability: an unavailable action is
+       ignored and warned, never partially applied. The contract identifier
+       is stored in every inference record so the format can evolve.
+
+05. PROMPT CONSTRUCTION
+
+05.01. Every inference gets a freshly built, situation-first prompt; no
+       conversation is replayed as an execution model. Order: identity and
+       personality; current time; pending lifecycle notices; current
+       activity (game summary, and the board where moves are available);
+       Important State; relevant State; recent experiences; relevant
+       memories or an explicit absence statement; applicable rules;
+       situation of this undertaking; its earlier steps; time; available
+       actions.
+05.02. The recent-experience window (default 4) is a bounded, labelled
+       selection, not a replay; it lets AI Buddy answer "what did you just
+       say?", which lexical retrieval would miss. recentLimit 0 disables it.
+05.03. Passive processing uses its own background framing (11.03).
+05.04. Each inference record stores what was selected (experience ids,
+       recent ids, retrieval results with scores, stored count, rules
+       shown, notices, scheduling decision, time pressure), so selected
+       versus stored can be inspected.
+
+06. MEMORY
+
+06.01. Material: experiences (user messages, AI Buddy's actual
+       communication; almost literal, oriented by time and source) and
+       memories: deliberate (<remember>, with origin: inference, thing to
+       do, source experiences), developer-provided (marked and presented as
+       such) and processed (passive reflections, presented as conclusions,
+       never as events).
+06.02. Retrieval aibuddy.retrieval.lexical@1: shared content terms weighted
+       by rarity, recency breaking ties. Chosen because no algorithm is
+       prescribed and Tertalis has no embedding facility; isolated in one
+       function for replacement. It misses paraphrases.
+06.03. Automatic selection per prompt (automaticLimit, default 5) excludes
+       the current input, the recent window and the undertaking's own
+       output. <recall> runs retrieval excluding everything already shown
+       to the model in this undertaking; outcomes: found, no-further
+       (matches exist but were shown), no-match, not-available. Results are
+       stored as working information and the undertaking continues with a
+       fresh prompt.
+06.04. Provenance follows a memory or communication to the inference,
+       thinking, developer interventions and source experiences ("how do
+       you know that?").
+
+07. THINGS TO DO
+
+07.01. An undertaking records activity, category, purpose, origin, flags
+       (important, optional, interrupt), dependencies, notBefore,
+       expiresAt, input experiences, steps (working information), active
+       processing time, start and last-advanced times, amendments and
+       developer interventions. All intermediate working information is
+       retained for now.
+07.02. Activities (strategy / category / passive):
+       process-user-input  inference / user-input / no
+       task                inference / task / no
+       recheck             inference / task / no
+       choice              inference / choice / no
+       minesweeper         inference / activity / no
+       investigation       inference / task / no
+       reaction            inference / task / no
+       memory-processing   inference / passive / yes
+       salient-subjects    inference / passive / yes
+       periodic-check      deterministic / periodic / yes
+07.03. Completion: an inference undertaking completes when a step neither
+       recalls nor asks to continue, or at maxContinuations (default 4,
+       when recall and continue are withdrawn and the model is asked to
+       conclude); activities follow 09.03; deterministic work completes by
+       its handler. Completion is not correctness: a recheck is separate
+       work and leaves the original record unchanged.
+07.04. AI Buddy can establish later work with <intend> (normal priority,
+       never Important; optional lifetime) without switching to it.
+
+08. ELIGIBILITY AND SELECTION
+
+08.01. Eligibility (deterministic, never by repeated inference): not
+       suspended; unstarted work past expiresAt is expired; dependencies
+       completed; notBefore reached; lifecycle permits (10.02).
+08.02. Selection aibuddy.scheduling.tiers@1: Interrupt directive, user
+       input, Important, normal, optional. Within a tier the least recently
+       advanced goes first (never advanced first, then oldest), so ordered
+       work shares execution one step at a time. This is this policy's
+       choice, not a universal priority ladder.
+08.03. Every decision is recorded with candidates, eligibility reasons and
+       the selection reason; the same evaluation is available live.
+08.04. Directives: State (relevant-only, at most 3); Important State
+       (always included, never schedules); Queue (establish work);
+       Important; Interrupt (tier 0 at the next boundary; a running
+       inference finishes); Choice (an Important choice undertaking whose
+       answer gives the chosen work the Interrupt directive). The developer
+       holds all six; AI Buddy can only Queue.
+08.05. Time awareness: prompts state when work started, active thinking
+       time (sum of inference durations) and, for input, wall time since the
+       first message. Pressure texts (defaults at 3, 30 and 120 seconds;
+       examples) apply by active time only, so debugger pauses never count.
+08.06. A new message amends an open user-input undertaking instead of
+       creating a separate obligation; a prepared but unrun inference of it
+       is superseded and rebuilt; earlier steps are kept; messages arriving
+       after a step exist are marked as having arrived during the work.
+08.07. Periodic checks run deterministically without inference; a check
+       may establish an activity when due. For Minesweeper a still-waiting
+       undertaking is escalated to Important (a periodic requirement making
+       the game more important over time); passive activities are never
+       escalated.
+08.08. Input during a running inference follows the driver's policy:
+       "finish" (default) lets it complete; "cancel" stops it and keeps its
+       partial output as an incomplete step that is shown but never acted
+       on, then rebuilds the prompt.
+
+09. MINESWEEPER
+
+09.01. A deterministic engine of pure functions. Mines are placed at the
+       first reveal from a seed, keeping the first cell (and its neighbours
+       where possible) safe; reveal flood-fills; win when every safe cell
+       is revealed. Illegal operations change nothing and are recorded as
+       outcomes. Each move records who made it and from which inference.
+       Mine positions never appear in prompts while a game is in progress.
+09.02. The game is an optional activity: one open undertaking and one game
+       in progress at a time; the game is created or restored when the
+       undertaking is first selected; a new undertaking resumes the game in
+       progress. Moves are available to the game undertaking and to input
+       processing while a game is in progress, so related input can act on
+       the game.
+09.03. The undertaking continues step by step (not counted as
+       continuations) until the game is won or lost, AI Buddy stops (the
+       game stays resumable), maxIdleSteps steps pass without a legal move
+       (default 3) or maxSteps (default 100). Activity prompts show the
+       board, the last 8 moves and the last stepsInPrompt (default 3) steps;
+       the game record holds the full history.
+
+10. LIFECYCLE
+
+10.01. AI Buddy-owned states: active; resting (AI Buddy's <rest> or the
+       developer); inactive (explicit, set and ended only by explicit
+       operations). History of transitions is kept (last 50).
+10.02. Resting: optional non-passive work waits; selecting any other
+       non-passive work ends the rest. Inactive: input is recorded and
+       queued but not processed; only passive work runs; queued work and
+       the Interrupt directive do not end it. Passive work never changes the
+       lifecycle.
+10.03. Notices: activation records the inactive period and a restart
+       records when the scheduler last ran; the next active prompt states
+       them. Passive prompts never consume notices. Activation does not
+       recount passive work.
+10.04. Quiescence is driver-controlled until the platform offers it: it
+       first deactivates AI Buddy (active and quiescent is invalid), then
+       runs no Jobs; commands that would run Jobs are deferred in order;
+       ending quiescence reactivates AI Buddy only if quiescence
+       deactivated it.
+
+11. RULES
+
+11.01. A rule records text, scope (general, minesweeper, user-input,
+       task), order, editable, active, origin and revision history. Rules
+       are a separate collection supplied as instructions, not retrieved by
+       relevance.
+11.02. Applicable rules appear in order, numbered, protected ones marked.
+       The inference record stores the rule ids shown, so a number in a
+       response means the rule the model saw.
+11.03. AI Buddy establishes rules (<rule>, in the undertaking's scope) and
+       can revise, reorder and retire only editable rules, or disregard any
+       rule for one step without changing it. Initial and developer rules
+       are protected unless marked editable; changes to protected rules are
+       rejected and recorded. Reordering gives a new order value only to the
+       moved rule, so other rules are never modified. The developer has full
+       authority. Rules never produce executable code.
+11.04. A move that loses a game establishes an investigation undertaking
+       showing the losing move, the final board with every mine (allowed
+       once the game is over), recent moves and rules; a rule learned there
+       records the investigated game.
+
+12. PASSIVE PROCESSING
+
+12.01. memory-processing reviews material past a cursor (batchSize,
+       default 20) with related older memories, and may record reflections
+       (processed memories) and scheduled reactions. With nothing new it
+       completes without calling the model; the cursor also moves past the
+       step's own reflections.
+12.02. salient-subjects reviews recent memories and open work and
+       establishes up to maxCandidates (default 3) optional, spontaneous
+       tasks with a lifetime (candidateLifetimeSeconds, default 86400; 0
+       means none). Unstarted candidates expire through ordinary expiry.
+12.03. Passive prompts are framed as background processing and offer only
+       their actions; anything else is ignored and warned. Passive results
+       never become experiences or speech.
+12.04. Scheduled reactions are the only passive-to-active channel: normal
+       undertakings, ineligible while inactive, competing normally once
+       active, presented as noted during background reflection.
+12.05. Passive processing is triggered by periodic configuration
+       (opportunistic) or the developer; none is configured by default
+       because it costs inference.
+
+13. AUTHORITY AND DEVELOPER INTERVENTION
+
+13.01. Inference output can only reach AI Buddy actions available in the
+       current situation (04.02). Capabilities under aiBuddy.debug. are
+       developer interventions and are never reachable from inference;
+       Tertalis has no per-caller capability authority, so AI Buddy enforces
+       this boundary itself.
+13.02. Developer interventions are recorded where they act (prompt and
+       output replacement, work changes, rule revisions, injected memories,
+       lifecycle changes) and are distinguishable from AI Buddy's own
+       actions in records and prompts.
+13.03. The driver stamps developer requests with its clock: orchestration
+       supplies time.
+13.04. Capabilities: aiBuddy.input.receive@1; aiBuddy.cycle.prepare@1,
+       execute@1, process@1, recordInterrupted@1; aiBuddy.outbox.pending@1,
+       acknowledge@1; aiBuddy.game.minesweeper.state@1; developer:
+       aiBuddy.debug.prompt.replace@1, output.replace@1, record.describe@1,
+       status@1, schedule@1, personality.describe@1, memory.search@1,
+       memory.inject@1, memory.provenance@1, work.add@1, work.choose@1,
+       work.change@1, situation.change@1, game.start@1, lifecycle.change@1,
+       rule.list@1, rule.add@1, rule.change@1, passive.start@1.
+
+14. CONFIGURATION (aiBuddy settings; all values are examples)
+
+14.01. providerName (llama.cpp), model, providerOptions.
+14.02. memory: recentLimit 4, automaticLimit 5, recallLimit 5,
+       maxContinuations 4.
+14.03. timePressure (3 / 30 / 120 s texts), timePressureCategories
+       (user-input), intentionLifetimeSeconds (none).
+14.04. periodic: [{name, everySeconds, important?, establishes?}];
+       none by default.
+14.05. activity: maxSteps 100, maxIdleSteps 3, movesPerStep 3,
+       stepsInPrompt 3, investigateLosses on. minesweeper: 9x9, 10 mines.
+14.06. passive: batchSize 20, maxCandidates 3, candidateLifetimeSeconds
+       86400.
+14.07. Driver: interrupt policy finish | cancel; breakpoint mode.
+
+15. REFINEMENTS OF THE CONCEPTUAL DESIGN
+
+Decisions taken during implementation where the conceptual design left a
+choice open. Each is changeable.
+15.01. Input while explicitly inactive is recorded and queued, not
+       processed, until activation.
+15.02. Quiescence deactivates AI Buddy and later restores only what it
+       changed.
+15.03. Resting has no expiry of its own.
+15.04. While a game is in progress the board is shown in every input
+       prompt, trading prompt size for letting related input act on it.
+15.05. A prepared inference is offered again before scheduling runs, so
+       while paused at a breakpoint new higher-tier work waits for it.
+15.06. Messages submitted together are handled as one undertaking.
+15.07. Activity steps do not consume the continuation limit; idle and step
+       limits bound them instead.
+
+16. OPEN QUESTIONS
+
+16.01. Rule precedence beyond simple order; whether rules should also be
+       retrievable as memories; scopes beyond the fixed set; how many rules
+       a prompt can hold before rules need selection.
+16.02. Retrieval quality beyond lexical matching; consolidation or
+       revisiting of reflections beyond one pass; boundary and cleanup of
+       working information after completion.
+16.03. Delay or expiry for scheduled reactions; AI Buddy suspending,
+       abandoning or amending its own work; inference-initiated Choice.
+16.04. A richer output contract than tags, and whether models follow the
+       current one reliably (a Stage 7 question).
