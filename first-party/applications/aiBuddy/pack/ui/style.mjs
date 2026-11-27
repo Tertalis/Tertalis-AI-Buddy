@@ -1,4 +1,4 @@
-// file: first-party/applications/aiBuddy/pack/ui/style.mjs ; version: 1
+// file: first-party/applications/aiBuddy/pack/ui/style.mjs ; version: 2
 /** Styles as a constructed stylesheet (no inline style, no extra asset kind). */
 const CSS = `
 :root { color-scheme: light dark; --bg: Canvas; --fg: CanvasText; --line: color-mix(in srgb, CanvasText 18%, transparent);
@@ -28,6 +28,7 @@ section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; 
 .message time { display: block; font-size: 11px; color: var(--muted); }
 form.say { display: flex; gap: 8px; } form.say textarea { flex: 1; }
 textarea, select, input { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+select, select option, select optgroup { color-scheme: light; color: #1f2937; background: #fff; }
 textarea.code, pre { font: 12px/1.4 ui-monospace, monospace; }
 pre { white-space: pre-wrap; margin: 0; max-height: 320px; overflow: auto; }
 .breakpoint textarea { width: 100%; box-sizing: border-box; min-height: 220px; }
