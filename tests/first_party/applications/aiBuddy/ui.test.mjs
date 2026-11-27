@@ -1,8 +1,8 @@
-// file: tests/first_party/applications/aiBuddy/ui.test.mjs ; version: 2
+// file: tests/first_party/applications/aiBuddy/ui.test.mjs ; version: 3
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync, readdirSync} from 'node:fs';
-import {breakpointModel, connectionLabel, inferenceSummary, INTERVENTIONS, lifecycleText, loopBadges, openWork, parsePayload, READS, recordView, splitRecordIds} from '../../../../first-party/applications/aiBuddy/pack/ui/model.mjs';
+import {breakpointModel, connectionLabel, inferenceSummary, INTERVENTIONS, lifecycleText, loopBadges, modelChoices, openWork, parsePayload, READS, recordView, splitRecordIds} from '../../../../first-party/applications/aiBuddy/pack/ui/model.mjs';
 
 const UI = new URL('../../../../first-party/applications/aiBuddy/pack/ui/', import.meta.url);
 const PACK = new URL('../../../../first-party/applications/aiBuddy/pack/', import.meta.url);
@@ -62,4 +62,11 @@ test('inference records show what was sent and received, and developer edits', (
   assert.deepEqual(prepared.sections.map(section => section.title), ['Prompt (not sent yet)']);
   assert.equal(recordView({id: 'w000001'}).kind, 'record');
   assert.equal(recordView(null).kind, 'missing');
+});
+
+test('the model selector appears only for the managed server', () => {
+  assert.equal(modelChoices(null), null);
+  assert.equal(modelChoices({mode: 'external', models: []}), null);
+  assert.deepEqual(modelChoices({mode: 'managed', selected: 'B', models: [{name: 'A', contextWindowTokens: 4096}, {name: 'B'}]}),
+    {selected: 'B', options: [{name: 'A', label: 'A (4096 tokens)'}, {name: 'B', label: 'B'}]});
 });

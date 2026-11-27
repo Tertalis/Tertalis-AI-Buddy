@@ -57,8 +57,9 @@ no Application source to provision tools.
 
 The AI Buddy AppPack and terminal launcher are implemented under
 `first-party/applications/aiBuddy/`. Root setup provisions Tertalis platform
-internals only. Start an external llama-server and use that application's
-`run.bat`; consult its README for options. AI Buddy requires Python 3.15;
+internals only. Configure its managed llama.cpp catalog or start an external
+llama-server, then use its `run.bat`; consult the application README for
+options and the managed-cancellation limitation. AI Buddy requires Python 3.15;
 the platform-only fallback above is not an AI Buddy compatibility claim.
 
 For platform development, after root setup run:

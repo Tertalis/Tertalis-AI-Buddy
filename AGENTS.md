@@ -51,8 +51,9 @@ From the repository root on Windows:
 
 Root setup prepares platform internals only; pytest tests exercises both
 platform and AI Buddy tests. Root setup must never discover or initialize
-applications. Run AI Buddy with first-party/applications/aiBuddy/run.bat
-after starting an external llama-server; see the application README.
+applications. Run AI Buddy with first-party/applications/aiBuddy/run.bat.
+Configure the application-local managed llama.cpp catalog or start an external
+llama-server; see the application README and its managed-cancellation limit.
 AI Buddy requires Python 3.15.
 Report the exact refs, actual tests performed and unverified conditions.
 Follow the canonical coordination handoff/completion protocol.

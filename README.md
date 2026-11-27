@@ -58,9 +58,13 @@ their documented environment or external prerequisites.
 
 ## Development direction and boundaries
 
-AI Buddy currently uses the first-party llama.cpp provider in external mode,
+AI Buddy uses the first-party llama.cpp provider in managed or external mode,
 with an application-owned loop driving Jobs and terminal and browser controls.
-Managed provider adoption and voice capabilities remain separate work.
+Managed mode reads the application-local `llama.local.json5` catalog (copy the
+application's `llama.example.json5`) and supports model selection while running.
+External mode remains available with `--llama-url`. See the application README
+for setup and the retained managed-cancellation limitation. Voice capabilities
+remain separate work.
 
 The AI Buddy workstream owns application-specific behavior. Reusable
 runtime, hosting, communication and service facilities belong to the

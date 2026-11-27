@@ -1,5 +1,5 @@
-# file: first-party/applications/aiBuddy/pack/codeEntry.py ; version: 9
-"""AI Buddy AppPack CodeEntry (materialization Checkpoints A to F).
+# file: first-party/applications/aiBuddy/pack/codeEntry.py ; version: 10
+"""AI Buddy AppPack CodeEntry (materialization Checkpoints A to H).
 
 All AI Buddy state lives in the Application's committed Value System root
 under ``aibuddy/``, so it is saved and restored by the platform SaveBundle
@@ -41,6 +41,7 @@ import random
 import re
 from datetime import datetime, timedelta, timezone
 
+from backend.llm.executionSessions import FreshContext
 from backend.llm.llmTypes import LlmQuery
 from backend.orchestration.cancellation import ExecutionCancelled
 from backend.values import MISSING
@@ -53,6 +54,7 @@ SCHEDULING_POLICY = "aibuddy.scheduling.tiers@1"
 _META = "aibuddy/meta"
 _PERSONALITY = "aibuddy/personality"
 _LIFECYCLE = "aibuddy/lifecycle"
+_LLM = "aibuddy/llm"
 _PASSIVE_CURSOR = "aibuddy/passive/cursor"
 _SEQUENCES = {
     "experience": ("aibuddy/experiences/sequence", "aibuddy/experiences", "e"),
@@ -117,6 +119,47 @@ def _load(view, address, default=None):
     """Loads one value, mapping an absent value to default."""
     value = view.load(address)
     return default if value is MISSING else value
+
+
+def _managedModels(ctx) -> tuple[str, ...] | None:
+    """Model names of the platform-managed llama.cpp catalog, or None in external mode.
+
+    The launcher passes the host-approved catalog as ctx.config["llamaCpp"]
+    unchanged (the platform rejects any difference), so its model names are
+    exactly the selectors AI Buddy has been granted.
+    """
+    llama = ctx.config.get("llamaCpp")
+    if not isinstance(llama, dict) or llama.get("manageServer") is not True:
+        return None
+    models = llama.get("models")
+    return tuple(models) if isinstance(models, dict) else ()
+
+
+def _defaultModel(ctx, models: tuple[str, ...]) -> str | None:
+    default = ctx.config["llamaCpp"].get("defaultModel")
+    return default if default in models else (models[0] if models else None)
+
+
+def _selectedModel(ctx, view) -> str | None:
+    """Managed: the model chosen in AI Buddy state if still configured, else the default.
+
+    External: the configured aiBuddy.model (usually None: the server's own model).
+    """
+    models = _managedModels(ctx)
+    if models is None:
+        return _settings(ctx)["model"]
+    chosen = (_load(view, _LLM, {}) or {}).get("model")
+    return chosen if chosen in models else _defaultModel(ctx, models)
+
+
+def _ensureModel(ctx, providerName: str, model: str) -> None:
+    """Managed: loads the model on the platform-managed server, or keeps it (no-op when loaded).
+
+    Only an idle server can switch; the platform refuses immediately when busy
+    or when an earlier request left its state unknown (known limitation: then
+    only an AI Buddy restart helps).
+    """
+    ctx.llm.transitionProfile(ctx.llm.profile(providerName=providerName, model=model))
 
 
 def _itemAddress(kind: str, number: int) -> tuple[str, str]:
@@ -1565,13 +1608,25 @@ def executeInference(ctx, payload):
             partial.append(event.text)
 
     startedAt = _now(payload)
+    model = _selectedModel(ctx, ctx.memory)
+    managed = _managedModels(ctx) is not None
+    if managed:
+        # A server that cannot provide the model is not this inference's failure:
+        # the Job fails, the inference stays prepared, and the loop pauses with the reason.
+        try:
+            _ensureModel(ctx, settings["providerName"], model)
+        except ExecutionCancelled:
+            raise
+        except Exception as error:
+            raise RuntimeError(f"The model server cannot provide {model!r}: {type(error).__name__}: {error}") from error
     try:
         result = ctx.llm.run(
             providerName=settings["providerName"],
-            model=settings["model"],
+            model=model,
             providerOptions=settings["providerOptions"],
             query=LlmQuery(formatId="text/plain", payload=prompt),
             streamObserver=observe,
+            **({"context": FreshContext()} if managed else {}),
         )
     except ExecutionCancelled:
         raise
@@ -1580,7 +1635,7 @@ def executeInference(ctx, payload):
         transaction = ctx.memory.openTransaction()
         transaction.set(address, {
             **inference, "state": "failed", "startedAt": startedAt,
-            "submittedPrompt": prompt, "provider": settings["providerName"], "model": settings["model"],
+            "submittedPrompt": prompt, "provider": settings["providerName"], "model": model,
             "error": message,
         })
         _closeWork(transaction, _work(transaction, inference["workId"]), state="failed", reason="inference-failed")
@@ -1597,7 +1652,7 @@ def executeInference(ctx, payload):
         "submittedPrompt": prompt,
         "submittedPromptSha256": _sha256(prompt),
         "provider": settings["providerName"],
-        "model": settings["model"],
+        "model": model,
         "generatedOutput": result.rawText,
         "rawOutput": result.rawText,
         "timing": result.timingSnapshot(),
@@ -2009,6 +2064,46 @@ def describeRecord(ctx, payload):
     return _workDefaults(record) if record is not None and payload["id"][0] == "w" else record
 
 
+def describeLlm(ctx, payload):
+    """Read-only: inference mode, configured models (names and context sizes only) and the selection."""
+    models = _managedModels(ctx)
+    if models is None:
+        return {"mode": "external", "models": [], "selected": _settings(ctx)["model"], "default": None}
+    llama = ctx.config["llamaCpp"]
+    described = []
+    for name in models:
+        entry = llama["models"][name] if isinstance(llama["models"][name], dict) else {}
+        described.append({"name": name, "contextWindowTokens": entry.get("contextWindowTokens", llama.get("contextWindowTokens"))})
+    return {"mode": "managed", "models": described, "selected": _selectedModel(ctx, ctx.memory),
+            "default": _defaultModel(ctx, models)}
+
+
+def selectLlm(ctx, payload):
+    """Developer: choose the model for following inferences; loads it now unless {"load": false}.
+
+    Runs as a Job at the loop's safe boundary, so it never interrupts an
+    inference. Loading a different model restarts the managed llama-server
+    with the new weights (AI Buddy keeps running); the current model is a no-op.
+    """
+    payload = _requirePayload(payload, "model")
+    models = _managedModels(ctx)
+    if models is None:
+        raise ValueError("Model selection needs the platform-managed llama.cpp server (llama.local.json5).")
+    model = payload["model"]
+    if model not in models:
+        raise ValueError(f"Unknown model {model!r}; configured: {', '.join(models)}.")
+    load = payload.get("load", True)
+    if type(load) is not bool:
+        raise ValueError("load must be true or false.")
+    previous = _selectedModel(ctx, ctx.memory)
+    if load:
+        _ensureModel(ctx, _settings(ctx)["providerName"], model)
+    transaction = ctx.memory.openTransaction()
+    transaction.set(_LLM, {"model": model, "selectedAt": _now(payload), "by": "developer", "previous": previous})
+    transaction.commit()
+    return {"model": model, "previous": previous, "loaded": load}
+
+
 def describeStatus(ctx, payload):
     """Read-only: returns a compact summary of current AI Buddy state."""
     return {
@@ -2026,6 +2121,7 @@ def describeStatus(ctx, payload):
         "lifecycle": {key: value for key, value in _lifecycle(ctx.memory).items() if key != "history"},
         "rules": len(_rules(ctx.memory)),
         "game": None if _currentGame(ctx.memory) is None else _gameSummary(_currentGame(ctx.memory)),
+        "llm": {"mode": "external" if _managedModels(ctx) is None else "managed", "model": _selectedModel(ctx, ctx.memory)},
     }
 
 
@@ -2388,6 +2484,8 @@ CAPABILITIES = {
     "aiBuddy.debug.rule.add@1": addRule,
     "aiBuddy.debug.rule.change@1": changeRule,
     "aiBuddy.debug.passive.start@1": startPassive,
+    "aiBuddy.debug.llm.describe@1": describeLlm,
+    "aiBuddy.debug.llm.select@1": selectLlm,
 }
 
 

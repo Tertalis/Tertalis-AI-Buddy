@@ -1,10 +1,11 @@
 AI BUDDY - IMPLEMENTATION DESIGN
-Version 1.1 | 2026-11-27
+Version 1.2 | 2026-11-27
 
 Companion to the AI Buddy conceptual design, initial materialization
 requirements and handoff. This document records how the initial
 materialization scope (requirements Stages 1-6, checkpoints A-F) and the
-browser UI (checkpoint G) are implemented on Tertalis and why. It records design, not status: platform
+browser UI (checkpoint G) and platform-managed llama.cpp (checkpoint H)
+are implemented on Tertalis and why. It records design, not status: platform
 gaps, workflow state and defects are tracked in the coordination records.
 
 01. STRUCTURE
@@ -25,7 +26,7 @@ gaps, workflow state and defects are tracked in the coordination records.
        other threads only enqueue commands or request cancellation of the
        running Job.
 01.03. Launcher (run.py, run.bat): RuntimeHost with the llama.cpp driver
-       Pack in external mode, the AI Buddy AppPack and, unless --no-ui, the
+       Pack, managed (19) or external, the AI Buddy AppPack and, unless --no-ui, the
        frontend.kit and frontend.host Packs; terminal input, developer
        commands, browser UI link, saves under local/.
 01.04. Tests (tests/first_party/applications/aiBuddy): runtime contracts
@@ -302,7 +303,8 @@ gaps, workflow state and defects are tracked in the coordination records.
        status@1, schedule@1, personality.describe@1, memory.search@1,
        memory.inject@1, memory.provenance@1, work.add@1, work.choose@1,
        work.change@1, situation.change@1, game.start@1, lifecycle.change@1,
-       rule.list@1, rule.add@1, rule.change@1, passive.start@1.
+       rule.list@1, rule.add@1, rule.change@1, passive.start@1,
+       llm.describe@1, llm.select@1.
 
 14. CONFIGURATION (aiBuddy settings; all values are examples)
 
@@ -398,3 +400,34 @@ Platform design: Tertalis design/working/browser-frontend-checkpoint-01.txt.
        abandoning or amending its own work; inference-initiated Choice.
 18.04. A richer output contract than tags, and whether models follow the
        current one reliably (a Stage 7 question).
+
+19. PLATFORM-MANAGED LLAMA.CPP (CHECKPOINT H)
+
+19.01. Host composition follows Experiment Runner (ER-03): the launcher
+       reads llama.local.json5 (template llama.example.json5; JSON5, only a
+       llamaCpp object, manageServer true), builds the LlamaCppCatalog,
+       grants AI Buddy's loaded buddy CodeEntry (exact source SHA-256) every
+       catalog model with transitions allowed, and passes the composer to
+       RuntimeHost. The same llamaCpp object is the Application config; the
+       platform rejects any difference. host/llamaManaged.py holds this.
+19.02. The selected model lives in AI Buddy state (aibuddy/llm), so it
+       survives restarts; an unknown or removed name falls back to the
+       catalog default. External mode keeps aiBuddy.model.
+19.03. Every managed inference first transitions to the selected model
+       (a confirmed no-op when it is loaded, a server restart with the other
+       weights otherwise), then runs with FreshContext. If the server cannot
+       provide the model, the execute Job fails: the inference stays
+       prepared and the loop pauses with the reason, instead of failing the
+       undertaking.
+19.04. aiBuddy.debug.llm.select@1 runs as a developer Job at the loop's
+       safe boundary (never during an inference) and loads the model at once
+       unless {"load": false}. aiBuddy.debug.llm.describe@1 returns names and
+       context sizes only, never paths. Both are on the browser allow-lists;
+       the header shows a model selector in managed mode; /model in the
+       terminal.
+19.05. Known limitation (platform design, ER-01): an unproven request
+       completion makes the server state unknown; later requests and
+       switches are refused and shutdown leaves the process running until
+       an AI Buddy restart and a manual end of llama-server. Mitigations:
+       finish interrupt policy by default, /interrupt! and a confirmation for
+       Stop while managed, quitting waits up to 30 s for the current step.

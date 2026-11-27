@@ -1,5 +1,5 @@
-# file: first-party/applications/aiBuddy/run.py ; version: 10
-"""Launcher for AI Buddy: terminal plus browser UI (materialization Checkpoints A-G).
+# file: first-party/applications/aiBuddy/run.py ; version: 11
+"""Launcher for AI Buddy: terminal plus browser UI (materialization Checkpoints A-H).
 
 Starts a Tertalis RuntimeHost, creates or loads one AI Buddy Application,
 runs the host-side loop on a background thread, and reads terminal
@@ -11,8 +11,13 @@ activated too and its launch link is printed. The link carries a private
 access token in its #fragment; open it in any local browser, in as many
 tabs as you like. Python stays authoritative; the terminal keeps working.
 
-Inference uses llama.cpp in external mode: start llama-server yourself
-and point --llama-url at it.
+Inference uses llama.cpp in one of two modes:
+- managed (when llama.local.json5 exists next to this file, or --llama-config
+  names a file): Tertalis starts llama-server itself and AI Buddy can switch
+  between the configured models (/model, or the browser UI) without restarting;
+- external (otherwise, or with --llama-url): start llama-server yourself and
+  point --llama-url at it.
+Copy llama.example.json5 to llama.local.json5 and fill it in for managed mode.
 """
 from __future__ import annotations
 
@@ -49,7 +54,9 @@ Developer commands:
   /edit             edit the paused prompt or response in an editor, then /continue
   /continue  (/c)   continue from the breakpoint or a pause
   /pause            stop starting new work at the next boundary
-  /interrupt        cancel the running inference (it stays prepared and paused)
+  /interrupt        cancel the running inference (it stays prepared and paused);
+                    with the managed server use /interrupt! (see the limitation in README)
+  /model            list the configured models (managed server); /model <name> switches
   /raw              raw output, interpretation and timing of the last inference
   /record <id>      show a stored record (e.g. i000001, w000001, e000001)
   /memories <text>  run memory retrieval for <text> and show what is found
@@ -106,9 +113,13 @@ def _parseArgs(argv):
     choice.add_argument("--new", action="store_true", help="Create a new AI Buddy instance.")
     choice.add_argument("--load", metavar="APPLICATION_ID", help="Load a specific instance.")
     choice.add_argument("--list", action="store_true", help="List saved instances and exit.")
-    parser.add_argument("--llama-url", default="http://127.0.0.1:18761", help="Running llama-server base URL.")
+    parser.add_argument("--llama-config", type=Path, default=None, metavar="FILE",
+                        help="Managed llama.cpp host file (default: llama.local.json5 here, if it exists).")
+    parser.add_argument("--llama-url", default=None,
+                        help="External mode: running llama-server base URL (default http://127.0.0.1:18761).")
     parser.add_argument("--context-window", type=int, default=None, help="Context window of the served model.")
-    parser.add_argument("--model", default=None, help="Model name to request, if the server routes models.")
+    parser.add_argument("--model", default=None,
+                        help="Managed: select this configured model. External: model name to request, if the server routes models.")
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--timeout", type=float, default=300.0, help="Per-inference timeout in seconds.")
@@ -138,16 +149,31 @@ def _savedInstances(saves: Path) -> list[Path]:
                   key=lambda path: path.stat().st_mtime, reverse=True)
 
 
-def _config(args) -> dict:
-    llama = {"baseUrl": args.llama_url}
-    if args.context_window is not None:
-        llama["contextWindowTokens"] = args.context_window
+def _llamaConfigPath(args) -> Path | None:
+    """The managed llama.cpp host file to use, or None for external mode."""
+    if args.llama_config is not None:
+        if args.llama_url is not None:
+            raise SystemExit("Use either --llama-config (managed) or --llama-url (external), not both.")
+        return args.llama_config
+    if args.llama_url is None and managedModule.DEFAULT_CONFIG.is_file():
+        return managedModule.DEFAULT_CONFIG
+    return None
+
+
+def _config(args, managedLlama=None) -> dict:
+    if managedLlama is not None:
+        llama = managedLlama.config        # must be identical to the approved catalog
+    else:
+        llama = {"baseUrl": args.llama_url or "http://127.0.0.1:18761"}
+        if args.context_window is not None:
+            llama["contextWindowTokens"] = args.context_window
     options = {"timeoutSeconds": args.timeout}
     if args.temperature is not None:
         options["temperature"] = args.temperature
     if args.max_tokens is not None:
         options["maxTokens"] = args.max_tokens
-    aiBuddy = {"providerName": "llama.cpp", "model": args.model, "providerOptions": options}
+    aiBuddy = {"providerName": "llama.cpp", "model": None if managedLlama is not None else args.model,
+               "providerOptions": options}
     if args.settings is not None:
         aiBuddy.update(args.settings)
     if args.memory is not None:
@@ -222,6 +248,9 @@ class Console:
         self.out(json.dumps(record, indent=2, ensure_ascii=False))
 
 
+managedModule = _loadHostModule("aiBuddyLlamaManaged", "llamaManaged.py")
+
+
 def main(argv=None) -> int:
     args = _parseArgs(argv)
     loopModule = _loadHostModule("aiBuddyHostLoop", "buddyLoop.py")
@@ -233,14 +262,25 @@ def main(argv=None) -> int:
             print(path.name)
         return 0
 
+    llamaPath = _llamaConfigPath(args)
+    managedLlama = None
+    if llamaPath is not None:
+        try:
+            managedLlama = managedModule.ManagedLlama(managedModule.readConfig(llamaPath))
+            if args.model is not None and args.model not in managedLlama.models:
+                raise ValueError(f"Unknown model {args.model!r}; configured: {', '.join(managedLlama.models)}.")
+        except Exception as error:  # noqa: BLE001 - shown to the user before anything starts.
+            print(f"Cannot use {llamaPath}: {type(error).__name__}: {error}")
+            return 2
     host = RuntimeHost(
         applicationStore=ApplicationStore(args.saves),
         packResolver=PackResolver(roots=(REPO_ROOT / "first-party" / "llmDrivers", APP_ROOT / "pack",
                                          REPO_ROOT / "first-party" / "frontendKit", REPO_ROOT / "first-party" / "frontendHost")),
+        **({"providerComposers": (managedLlama.composer,)} if managedLlama is not None else {}),
     )
     host.start()
     try:
-        config = _config(args)
+        config = _config(args, managedLlama)
         plan = UI_PLAN if args.ui else PLAN
         existing = _savedInstances(args.saves)
         if args.load or (existing and not args.new):
@@ -251,7 +291,15 @@ def main(argv=None) -> int:
         else:
             runtime = host.createApplication(appPackId=APP_PACK_ID, plan=plan, config=config)
             print(f"Created AI Buddy instance {runtime.applicationRun.application.applicationId}")
-        print(f"Inference: llama.cpp at {args.llama_url}. Type /help for commands.")
+        if managedLlama is not None:
+            selected = runtime.invokeCapability("aiBuddy.debug.llm.describe@1")["selected"]
+            print(f"Inference: managed llama.cpp from {llamaPath.name}; models: {', '.join(managedLlama.models)}; "
+                  f"selected: {args.model or selected} (loads on first use). Type /help for commands.")
+            if args.interrupt_policy == "cancel":
+                print("Note: --interrupt-policy cancel with the managed server can leave it unusable until restart "
+                      "(known limitation, see README).")
+        else:
+            print(f"Inference: llama.cpp at {args.llama_url or 'http://127.0.0.1:18761'}. Type /help for commands.")
 
         personality = runtime.invokeCapability("aiBuddy.debug.personality.describe@1")
         console = Console(personality["name"])
@@ -260,6 +308,9 @@ def main(argv=None) -> int:
             paused=console.paused, inferenceFinished=console.finished), interruptPolicy=args.interrupt_policy)
         if args.breakAtStart:
             driver.setBreakBeforeInference(True)
+        if managedLlama is not None and args.model:
+            # Recorded now, loaded by the first inference.
+            driver.developerJob("aiBuddy.debug.llm.select@1", {"model": args.model, "load": False})
 
         stop = threading.Event()
         uiLink = None
@@ -376,9 +427,25 @@ def main(argv=None) -> int:
                     driver.continueExecution()
                 elif command == "pause":
                     driver.pause()
-                elif command == "interrupt":
-                    if not driver.interrupt():
+                elif command in ("interrupt", "interrupt!"):
+                    if managedLlama is not None and command == "interrupt" and driver.busy:
+                        console.diagnostic("with the managed server, cancelling mid-answer can leave it unusable until "
+                                           "AI Buddy restarts (known limitation). Use /interrupt! to cancel anyway.")
+                    elif not driver.interrupt():
                         console.diagnostic("nothing is running")
+                elif command == "model":
+                    if not argument:
+                        info = ask("aiBuddy.debug.llm.describe@1")
+                        if info["mode"] != "managed":
+                            console.diagnostic("model selection needs the managed server (llama.local.json5)")
+                        else:
+                            for model in info["models"]:
+                                mark = "*" if model["name"] == info["selected"] else " "
+                                size = f" ({model['contextWindowTokens']} tokens)" if model.get("contextWindowTokens") else ""
+                                console.out(f" {mark} {model['name']}{size}")
+                    else:
+                        console.diagnostic(f"switching to {argument} (loading can take a while)...")
+                        intervene("aiBuddy.debug.llm.select@1", {"model": argument})
                 elif command == "raw":
                     console.showRecord(console.lastRecord)
                 elif command == "record":
@@ -526,8 +593,15 @@ def main(argv=None) -> int:
         except KeyboardInterrupt:
             pass
         finally:
-            driver.interrupt()
             stop.set()
+            if managedLlama is None or not driver.busy:
+                driver.interrupt()
+            else:
+                # Cancelling mid-answer can leave the managed server unusable (known limitation):
+                # let the running step finish first, then cancel only if it takes too long.
+                console.diagnostic("waiting up to 30s for the current step to finish...")
+                worker.join(timeout=30)
+                driver.interrupt()
             worker.join(timeout=30)
             if worker.is_alive():
                 console.diagnostic("loop did not stop within 30s; exiting without final save")

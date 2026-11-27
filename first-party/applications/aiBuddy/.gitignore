@@ -1,2 +1,4 @@
 # Ignore local data
 local/
+# Local managed llama.cpp configuration (copy of llama.example.json5)
+llama.local.json5

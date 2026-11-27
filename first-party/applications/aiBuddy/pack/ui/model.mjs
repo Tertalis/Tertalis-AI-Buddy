@@ -1,4 +1,4 @@
-// file: first-party/applications/aiBuddy/pack/ui/model.mjs ; version: 2
+// file: first-party/applications/aiBuddy/pack/ui/model.mjs ; version: 3
 /** Pure view-model functions from track values (DOM-free, Node-testable). */
 export const TRACKS = {
   loop: 'aibuddy.loop', status: 'aibuddy.status', breakpoint: 'aibuddy.breakpoint', inference: 'aibuddy.inference',
@@ -13,6 +13,7 @@ export const READS = [
   ['aiBuddy.debug.rule.list@1', 'Rules', {includeRetired: false}],
   ['aiBuddy.debug.personality.describe@1', 'Personality', null],
   ['aiBuddy.game.minesweeper.state@1', 'Game (developer view)', {showMines: true}],
+  ['aiBuddy.debug.llm.describe@1', 'Models', null],
 ];
 export const INTERVENTIONS = [
   ['aiBuddy.debug.work.add@1', 'Add task', {kind: 'task', purpose: '', important: false}],
@@ -25,7 +26,14 @@ export const INTERVENTIONS = [
   ['aiBuddy.debug.rule.change@1', 'Change rule', {ruleId: 'r000001', action: 'retire'}],
   ['aiBuddy.debug.passive.start@1', 'Passive processing', {activity: 'memory-processing'}],
   ['aiBuddy.debug.memory.inject@1', 'Inject memory', {text: ''}],
+  ['aiBuddy.debug.llm.select@1', 'Select model', {model: ''}],
 ];
+/** Model selector model: null when the server is external (nothing to choose). */
+export function modelChoices(llm) {
+  if (!llm || llm.mode !== 'managed' || !Array.isArray(llm.models) || !llm.models.length) return null;
+  return {selected: llm.selected, options: llm.models.map(model => ({name: model.name,
+    label: model.name + (model.contextWindowTokens ? ' (' + model.contextWindowTokens + ' tokens)' : '')}))};
+}
 
 /** Badges for the loop flags; [label, tone] pairs. */
 export function loopBadges(flags) {

@@ -1,4 +1,4 @@
-# file: tests/first_party/applications/aiBuddy/conftest.py ; version: 6
+# file: tests/first_party/applications/aiBuddy/conftest.py ; version: 7
 """Shared AI Buddy test harness: RuntimeHost, AI Buddy and a scripted stub provider."""
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ APP_ROOT = REPO_ROOT / "first-party" / "applications" / "aiBuddy"
 PLAN = ManualActivationPlan(packIds=("test.stubProvider", "aiBuddy"))
 FRONTEND_PLAN = ManualActivationPlan(packIds=("test.stubProvider", "aiBuddy", "frontend.kit", "frontend.host"))
 FRONTEND_ROOTS = (REPO_ROOT / "first-party" / "frontendKit", REPO_ROOT / "first-party" / "frontendHost")
+DRIVER_ROOT = REPO_ROOT / "first-party" / "llmDrivers" / "llamaCpp"
 
 _STUB_PROVIDER = '''
 import json, time
@@ -80,6 +81,19 @@ def _loadBridgeModule():
 bridgeModule = _loadBridgeModule()
 
 
+def _loadManagedModule():
+    """Imports host/llamaManaged.py the way run.py does."""
+    path = APP_ROOT / "host" / "llamaManaged.py"
+    spec = importlib.util.spec_from_file_location("aiBuddyLlamaManaged", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+managedModule = _loadManagedModule()
+
+
 def _loadPackModule():
     """Imports the AppPack CodeEntry for its pure functions (e.g. the game engine)."""
     path = APP_ROOT / "pack" / "codeEntry.py"
@@ -98,7 +112,9 @@ class Harness:
 
     def __init__(self, tmp_path: Path, responses, *, applicationId: str | None = None,
                  memory: dict | None = None, settings: dict | None = None,
-                 interruptPolicy: str = "finish", frontend: bool = False) -> None:
+                 interruptPolicy: str = "finish", frontend: bool = False, llama: dict | None = None) -> None:
+        """llama: a managed llama.cpp catalog; the platform-managed server replaces the stub provider
+        (process and HTTP must then be faked by the test, see test_checkpointH.py)."""
         stubRoot = tmp_path / "stub"
         packDir = stubRoot / "stubProvider"
         if not packDir.exists():
@@ -109,11 +125,13 @@ class Harness:
             (packDir / "codeEntry.py").write_text(_STUB_PROVIDER, encoding="utf-8", newline="\n")
         self.log = tmp_path / "provider-log.jsonl"
         self.store = ApplicationStore(tmp_path / "saves")
+        self.managed = None if llama is None else managedModule.ManagedLlama(llama)
         self.host = RuntimeHost(applicationStore=self.store,
-                                packResolver=PackResolver(roots=(stubRoot, APP_ROOT / "pack", *FRONTEND_ROOTS)))
+                                packResolver=PackResolver(roots=(stubRoot, APP_ROOT / "pack", *FRONTEND_ROOTS, DRIVER_ROOT)),
+                                **({} if self.managed is None else {"providerComposers": (self.managed.composer,)}))
         self.host.start()
         self.closed = False
-        aiBuddy = {"providerName": "stub"}
+        aiBuddy = {"providerName": "stub" if llama is None else "llama.cpp"}
         if memory is not None:
             aiBuddy["memory"] = memory
         aiBuddy.update(settings or {})
@@ -121,6 +139,9 @@ class Harness:
         config = {"aiBuddy": aiBuddy,
                   "stubProvider": {"responses": list(responses), "log": str(self.log)}}
         plan = FRONTEND_PLAN if frontend else PLAN
+        if llama is not None:
+            plan = ManualActivationPlan(packIds=("llmDrivers.llamaCpp", *plan.packIds[1:]))
+            config["llamaCpp"] = llama
         if frontend:
             config["frontendHost"] = {"title": "AI Buddy", "main": {"packId": "aiBuddy", "codeEntryId": "ui"}}
         if applicationId is None:

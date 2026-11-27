@@ -1,4 +1,4 @@
-# file: first-party/applications/aiBuddy/host/frontendBridge.py ; version: 2
+# file: first-party/applications/aiBuddy/host/frontendBridge.py ; version: 3
 """Connects the AI Buddy loop to the browser frontend channel (frontend.host@0.1.0).
 
 This is the only AI Buddy module that knows the channel API. It turns loop
@@ -30,13 +30,13 @@ __all__ = ["FrontendBridge", "READ_CAPABILITIES", "INTERVENTION_CAPABILITIES"]
 READ_CAPABILITIES = frozenset({
     "aiBuddy.debug.status@1", "aiBuddy.debug.schedule@1", "aiBuddy.debug.record.describe@1",
     "aiBuddy.debug.memory.search@1", "aiBuddy.debug.memory.provenance@1", "aiBuddy.debug.rule.list@1",
-    "aiBuddy.debug.personality.describe@1", "aiBuddy.game.minesweeper.state@1",
+    "aiBuddy.debug.personality.describe@1", "aiBuddy.game.minesweeper.state@1", "aiBuddy.debug.llm.describe@1",
 })
 INTERVENTION_CAPABILITIES = frozenset({
     "aiBuddy.debug.work.add@1", "aiBuddy.debug.work.choose@1", "aiBuddy.debug.work.change@1",
     "aiBuddy.debug.situation.change@1", "aiBuddy.debug.game.start@1", "aiBuddy.debug.lifecycle.change@1",
     "aiBuddy.debug.rule.add@1", "aiBuddy.debug.rule.change@1", "aiBuddy.debug.passive.start@1",
-    "aiBuddy.debug.memory.inject@1",
+    "aiBuddy.debug.memory.inject@1", "aiBuddy.debug.llm.select@1",
 })
 MAX_TEXT = 64 * 1024
 INFERENCE_HISTORY = 200

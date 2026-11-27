@@ -1,0 +1,3 @@
+# AI Buddy application dependencies (the root Tertalis requirements already include json5;
+# listed here so the application states what it needs).
+json5

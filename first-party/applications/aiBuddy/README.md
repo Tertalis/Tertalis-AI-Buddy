@@ -1,6 +1,6 @@
 # AI Buddy
 
-**Status: experimental. Checkpoints A to F verified by the user on Python 3.15; Checkpoint G (browser UI) added on Tertalis 82772a2.**
+**Status: experimental. Checkpoints A to F verified by the user on Python 3.15; Checkpoint G (browser UI) accepted; Checkpoint H (platform-managed llama.cpp with model selection) added, not yet run against a real llama-server.**
 
 AI Buddy is a continuously running AI companion built as a Tertalis AppPack.
 Requirements and design: `ai-buddy-conceptual-design.txt`,
@@ -97,6 +97,9 @@ pack/          AppPack (manifest, codeEntry.py, personality.json, rules.json,
                ui/ browser UI CodeEntries)
 host/buddyLoop.py       host-side loop: runs capabilities as Jobs, debugger controls
 host/frontendBridge.py  loop <-> browser UI channel (tracks and Invocations)
+host/llamaManaged.py    trusted composition for the platform-managed llama.cpp server
+llama.example.json5     commented example; copy to llama.local.json5 (ignored by Git)
+requirements.txt        application Python dependencies (json5)
 run.py         launcher (terminal + browser UI)
 run.bat        Windows launcher using the root python-embedded
 local/         saves (ignored by Git)
@@ -108,10 +111,34 @@ scripted stub provider; conftest.py holds the shared harness).
 
 ## Running
 
-1. Run the root Tertalis `setup.bat`.
-2. Start a llama-server yourself, for example:
-   `llama-server -m C:\models\your-model.gguf --port 8080 -c 16384`
+1. Run the root Tertalis `setup.bat` (it installs `json5`, which
+   `requirements.txt` here also lists).
+2. Choose how the model runs:
+   - **Managed (recommended):** copy `llama.example.json5` to
+     `llama.local.json5` (ignored by Git) and fill in your `llama-server`
+     path and models; the comments explain each setting. Tertalis then starts
+     and stops `llama-server` itself, and you can switch between the
+     configured models while AI Buddy runs: `/model` lists them, `/model <name>`
+     switches, or use the model selector in the browser UI. Switching to a
+     different model restarts `llama-server` with the new weights (seconds to
+     minutes, depending on the model); AI Buddy keeps running. `--model <name>`
+     selects one at start; `--llama-config <file>` uses another file.
+   - **External:** without `llama.local.json5` (or with `--llama-url`), start
+     a llama-server yourself, for example
+     `llama-server -m C:\models\your-model.gguf --port 18761 -c 16384`.
 3. Run `run.bat` (add `--break` to start with the inference breakpoint on).
+
+**Known limitation (managed mode).** If Tertalis cannot confirm that a
+request finished cleanly (for example after cancelling an answer midway, a
+timeout, or a malformed reply), it refuses further requests and model
+switches until AI Buddy restarts; the loop pauses with "The model server
+cannot provide ..." and the inference stays prepared. AI Buddy then lets the
+server keep running on quit; end `llama-server` yourself (Task Manager)
+before starting again. This is deliberate platform behaviour, pending a
+reviewed recovery mechanism. To avoid it, let answers finish: the default
+`--interrupt-policy finish` does, `/interrupt` asks for `/interrupt!` while
+an answer is running, the browser Stop button asks for confirmation, and
+quitting waits up to 30 s for the current step.
 
 Useful options: `--llama-url`, `--context-window`, `--temperature`,
 `--max-tokens`, `--timeout`, `--new`, `--load <applicationId>`, `--list`,

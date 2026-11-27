@@ -1,0 +1,92 @@
+// file: first-party/applications/aiBuddy/llama.example.json5 ; version: 1
+//
+// Platform-managed llama.cpp for AI Buddy: Tertalis starts llama-server itself,
+// and you can switch between the models below while AI Buddy runs
+// (/model <name> in the terminal, or the model selector in the browser UI).
+//
+// How to use:
+//   1. Copy this file to llama.local.json5 in the same folder (that name is
+//      ignored by Git, so your paths stay private).
+//   2. Fill in the paths marked FILL IN. Use absolute paths; forward slashes
+//      work on Windows too.
+//   3. Run run.bat. With llama.local.json5 present, AI Buddy uses managed mode;
+//      without it (or with --llama-url) it uses a llama-server you started yourself.
+//
+// Switching to another model restarts llama-server with the new weights (it
+// holds one model at a time); AI Buddy keeps running. Request settings such
+// as --temperature or --max-tokens never need a reload.
+//
+// Known limitation: if a request cannot be confirmed as cleanly finished (for
+// example after cancelling an answer midway), Tertalis refuses further
+// requests until AI Buddy restarts, and you may have to end llama-server
+// yourself (Task Manager). Prefer letting answers finish.
+//
+// Only "llamaCpp" is allowed at the top level. This object is the trusted
+// catalog: the platform checks that AI Buddy uses exactly this configuration.
+{
+  llamaCpp: {
+    // Must be true: Tertalis owns the server process.
+    manageServer: true,
+
+    // FILL IN: your llama-server executable (from a llama.cpp release or build).
+    executable: "C:/llama.cpp/llama-server.exe",
+
+    // Where the managed server listens. Any free local port; keep 127.0.0.1.
+    host: "127.0.0.1",
+    port: 18761,
+
+    // Seconds to wait for a model to load before giving up. Large models on
+    // slow disks may need more.
+    startupTimeoutSeconds: 180,
+
+    // "required" checks that the executable supports the controls used here
+    // before starting it; "none" skips the check.
+    capabilityCheck: "required",
+
+    // Extra llama-server arguments for every model. Keep "--slots": the
+    // platform reads the slots endpoint to confirm each request finished.
+    // Structured settings (context size, GPU layers, threads, ...) must use
+    // the named fields below, not extraArgs.
+    extraArgs: ["--slots", "--no-webui"],
+
+    // Settings here are defaults for every model; a model entry can override them.
+    // parallelSlots: 1 is right for AI Buddy (one inference at a time).
+    parallelSlots: 1,
+
+    // Which model to use until you select another one (must be a key of "models").
+    defaultModel: "main",
+
+    // The models you can choose between. The key is the name you select
+    // (/model main). Each entry needs modelPath; everything else is optional.
+    models: {
+      main: {
+        // FILL IN: path to the GGUF file.
+        modelPath: "C:/models/your-main-model.gguf",
+        // Context size in tokens. Bigger needs more memory; AI Buddy's
+        // prompts usually fit in 8192-16384.
+        contextWindowTokens: 16384,
+        // Layers to put on the GPU: 0 = CPU only, a large number (e.g. 999) = all.
+        gpuLayers: 999,
+        // CPU threads for generation and for prompt processing.
+        threads: 8,
+        threadsBatch: 8,
+        // Optional: flash attention (true/false) and KV cache types (e.g. "q8_0").
+        // flashAttention: true,
+        // cacheTypeK: "q8_0",
+        // cacheTypeV: "q8_0",
+        // Optional: model thinking mode at startup: "on", "off" or "auto".
+        // serverReasoning: "off",
+      },
+
+      // A second, smaller model you can switch to. Delete it if you only have one.
+      small: {
+        // FILL IN: path to the second GGUF file.
+        modelPath: "C:/models/your-small-model.gguf",
+        contextWindowTokens: 8192,
+        gpuLayers: 999,
+        threads: 8,
+        threadsBatch: 8,
+      },
+    },
+  },
+}
