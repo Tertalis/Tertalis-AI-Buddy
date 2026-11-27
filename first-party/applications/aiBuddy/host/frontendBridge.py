@@ -1,4 +1,4 @@
-# file: first-party/applications/aiBuddy/host/frontendBridge.py ; version: 1
+# file: first-party/applications/aiBuddy/host/frontendBridge.py ; version: 2
 """Connects the AI Buddy loop to the browser frontend channel (frontend.host@0.1.0).
 
 This is the only AI Buddy module that knows the channel API. It turns loop
@@ -11,8 +11,11 @@ Tracks:
     aibuddy.loop          state  loop flags (busy, paused, quiescent, breakpoints), published at once
     aibuddy.status        state  AI Buddy status summary (refreshed at the loop's next boundary)
     aibuddy.breakpoint    state  current pause (pauseId, phase, prompt/rawOutput) or null
-    aibuddy.inference     state  running inference partial output, last finished record
+    aibuddy.inference     state  running inference partial output, last finished summary
     aibuddy.game          state  Minesweeper state, or null
+    aibuddy.inferences    log    summaries of the last INFERENCE_HISTORY finished inferences
+                                 (full records stay in AI Buddy state; the browser loads one
+                                 on demand through aiBuddy.read and releases it when closed)
     aibuddy.conversation  log    {"from": "user"|"buddy", "text", "at"}
     aibuddy.diagnostics   log    {"text", "at"}
 """
@@ -36,6 +39,7 @@ INTERVENTION_CAPABILITIES = frozenset({
     "aiBuddy.debug.memory.inject@1",
 })
 MAX_TEXT = 64 * 1024
+INFERENCE_HISTORY = 200
 MAX_PARTIAL = 128 * 1024
 
 
@@ -69,6 +73,7 @@ class FrontendBridge:
         channel.declareTrack("aibuddy.breakpoint", "state", initial=None)
         channel.declareTrack("aibuddy.inference", "state", initial={"running": False, "partial": "", "last": None})
         channel.declareTrack("aibuddy.game", "state", initial=None)
+        channel.declareTrack("aibuddy.inferences", "log", maxItems=INFERENCE_HISTORY)
         channel.declareTrack("aibuddy.conversation", "log")
         channel.declareTrack("aibuddy.diagnostics", "log")
 
@@ -119,10 +124,27 @@ class FrontendBridge:
         self._markDirty()
 
     def _finished(self, record: dict) -> None:
-        self._lastRecord = record
+        summary = self._inferenceSummary(record)
+        self._lastRecord = summary          # summaries only: prompts/outputs are loaded on demand
         self._lastPartial = None
-        self.channel.set("aibuddy.inference", {"running": False, "partial": "", "last": record})
+        self.channel.set("aibuddy.inference", {"running": False, "partial": "", "last": summary})
+        self.channel.append("aibuddy.inferences", summary)
         self._markDirty()
+
+    @staticmethod
+    def _inferenceSummary(record: dict) -> dict:
+        """Small list entry; the full record (prompt, output) is read on demand."""
+        record = record if isinstance(record, dict) else {}
+        timing = record.get("timing") if isinstance(record.get("timing"), dict) else {}
+        sent = record.get("submittedPrompt", record.get("prompt"))
+        return {
+            "id": record.get("id"), "workId": record.get("workId"), "purpose": record.get("purpose"),
+            "state": record.get("state"), "at": record.get("generatedAt") or _now(),
+            "durationNs": timing.get("durationNs"),
+            "promptEdited": sent is not None and sent != record.get("builtPrompt", sent),
+            "outputEdited": record.get("rawOutput") != record.get("generatedOutput", record.get("rawOutput")),
+            "error": record.get("error"),
+        }
 
     @staticmethod
     def _pauseView(info: dict) -> dict:

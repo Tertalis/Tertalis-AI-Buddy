@@ -1,4 +1,4 @@
-# file: backend/transport/loopbackHttp.py ; version: 1
+# file: backend/transport/loopbackHttp.py ; version: 2
 """Shared IPv4-loopback HTTP mechanics for first-party local endpoints.
 
 Moved out of the G-01 observation bridge so every local endpoint uses one
@@ -10,6 +10,7 @@ helpers authenticate a single per-endpoint credential and nothing more.
 """
 from __future__ import annotations
 
+import os
 import secrets
 import socket
 from collections.abc import Callable, Iterable
@@ -85,7 +86,10 @@ class LoopbackHttpServer(HTTPServer):
     """Literal-loopback server with bounded socket I/O and interruptible clients."""
 
     request_queue_size = 8
-    allow_reuse_address = False
+    # POSIX SO_REUSEADDR only lets a restarted endpoint bind while old connections sit in
+    # TIME_WAIT (a fixed --ui-port restart would otherwise fail for about a minute); it never
+    # allows two listeners. On Windows the same option would allow port hijacking, so it stays off.
+    allow_reuse_address = os.name != "nt"
 
     def __init__(self, port: int, handlerClass, *, isStopping: Callable[[], bool], socketTimeout: float = 1.0, host: str = LOOPBACK_HOST, maxClients: int | None = None) -> None:
         """Binds 127.0.0.1 only; isStopping lets the owner refuse new connections during close.

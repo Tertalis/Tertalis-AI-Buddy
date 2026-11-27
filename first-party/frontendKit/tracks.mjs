@@ -1,4 +1,4 @@
-// file: first-party/frontendKit/tracks.mjs ; version: 1
+// file: first-party/frontendKit/tracks.mjs ; version: 2
 /**
  * Client-side track mirror. The host is authoritative; this only orders what it was told.
  * Positions are per track and per run. A snapshot at position p contains every Emit up to p.
@@ -8,8 +8,11 @@ export const MAX_LOG_ITEMS = 2000;
 
 export class TrackStore {
   constructor({maxLogItems = MAX_LOG_ITEMS} = {}) {
-    this.maxLogItems = maxLogItems; this.runId = null; this.tracks = new Map(); this.listeners = new Map();
+    this.maxLogItems = maxLogItems; this.runId = null; this.tracks = new Map(); this.listeners = new Map(); this.limits = new Map();
   }
+  /** Per-track log bound announced by the host (never above the store-wide bound). */
+  limit(name, maxItems) { if (Number.isInteger(maxItems) && maxItems > 0) this.limits.set(name, Math.min(maxItems, this.maxLogItems)); }
+  maxItems(name) { return this.limits.get(name) ?? this.maxLogItems; }
   /** Forget everything from a previous run; listeners stay subscribed and are told. */
   reset(runId) {
     this.runId = runId; const names = [...this.tracks.keys()]; this.tracks.clear();
@@ -23,7 +26,7 @@ export class TrackStore {
     const held = this.tracks.get(snapshot.track);
     if (held && held.position >= snapshot.position) return false;
     const track = snapshot.style === 'log'
-      ? {style: 'log', position: snapshot.position, items: [...snapshot.items].slice(-this.maxLogItems)}
+      ? {style: 'log', position: snapshot.position, items: [...snapshot.items].slice(-this.maxItems(snapshot.track))}
       : {style: 'state', position: snapshot.position, value: snapshot.value};
     this.tracks.set(snapshot.track, track); this.notify(snapshot.track); return true;
   }
@@ -34,7 +37,7 @@ export class TrackStore {
     if (emit.position <= track.position) return 'stale';
     if (emit.position !== track.position + 1) return 'gap';
     if (emit.kind === 'set' && track.style === 'state') track.value = emit.value;
-    else if (emit.kind === 'append' && track.style === 'log') { track.items.push(emit.value); if (track.items.length > this.maxLogItems) track.items.splice(0, track.items.length - this.maxLogItems); }
+    else if (emit.kind === 'append' && track.style === 'log') { track.items.push(emit.value); const max = this.maxItems(emit.track); if (track.items.length > max) track.items.splice(0, track.items.length - max); }
     else if (emit.kind === 'reset' && track.style === 'log') track.items = [];
     else return 'gap';
     track.position = emit.position;

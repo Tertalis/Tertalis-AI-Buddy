@@ -1,4 +1,4 @@
-# file: tests/first_party/applications/aiBuddy/test_checkpointG.py ; version: 1
+# file: tests/first_party/applications/aiBuddy/test_checkpointG.py ; version: 2
 """Checkpoint G: browser frontend - the bridge maps Invocations to the loop and loop events to tracks.
 
 HTTP and browser behaviour of frontend.host/frontend.kit are platform-tested;
@@ -176,3 +176,40 @@ def test_without_a_browser_the_buddy_behaves_the_same(makeHarness, frontend):
     h = makeHarness(["<say>same</say>"], frontend=frontend)
     h.run("Hello")
     assert h.spoken == ["same"]
+
+
+def test_inference_history_is_bounded_summaries_and_details_load_on_demand(makeHarness):
+    h = makeHarness(["<say>original</say>"], frontend=True)
+    tracks = {item["name"]: item for item in h.channel.describeTracks()}
+    assert tracks["aibuddy.inferences"] == {"name": "aibuddy.inferences", "style": "log", "maxItems": 200}
+    invoke(h, "aiBuddy.breakpoints", {"enabled": True})
+    invoke(h, "aiBuddy.say", {"text": "Hi"})
+    drain(h)
+    pause = track(h, "aibuddy.breakpoint")
+    invoke(h, "aiBuddy.replacePrompt", {"text": "EDITED PROMPT"}, {"pause": pause["pauseId"]})
+    invoke(h, "aiBuddy.continue", {}, {"pause": pause["pauseId"]})
+    drain(h)
+    output = track(h, "aibuddy.breakpoint")
+    invoke(h, "aiBuddy.replaceOutput", {"text": "<say>replaced</say>"}, {"pause": output["pauseId"]})
+    invoke(h, "aiBuddy.continue", {}, {"pause": output["pauseId"]})
+    drain(h)
+    (summary,) = track(h, "aibuddy.inferences")
+    assert summary["id"] == pause["inferenceId"] and summary["state"] == "completed"
+    assert summary["promptEdited"] is True and summary["outputEdited"] is True
+    assert not {"prompt", "builtPrompt", "rawOutput", "generatedOutput"} & set(summary), "no prompts in the list"
+    assert track(h, "aibuddy.inference")["last"] == summary
+    details = invoke(h, "aiBuddy.read", {"capability": "aiBuddy.debug.record.describe@1", "payload": {"id": summary["id"]}})
+    drain(h)
+    record = outcome(h, details)["value"]
+    assert record["submittedPrompt"] == "EDITED PROMPT" and record["builtPrompt"] != "EDITED PROMPT"
+    assert record["generatedOutput"] == "<say>original</say>" and record["rawOutput"] == "<say>replaced</say>"
+
+
+def test_inference_history_keeps_only_the_most_recent(makeHarness, monkeypatch):
+    monkeypatch.setattr(sys.modules["aiBuddyFrontendBridge"], "INFERENCE_HISTORY", 3)
+    h = makeHarness([f"<say>reply {n}</say>" for n in range(5)], frontend=True)
+    for n in range(5):
+        h.run(f"message {n}")
+    h.bridge.pump()
+    ids = [item["id"] for item in track(h, "aibuddy.inferences")]
+    assert len(ids) == 3 and ids == sorted(ids) and ids[-1] == track(h, "aibuddy.inference")["last"]["id"]

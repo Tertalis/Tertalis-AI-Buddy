@@ -1,4 +1,4 @@
-// file: first-party/frontendKit/session.mjs ; version: 2
+// file: first-party/frontendKit/session.mjs ; version: 3
 /** Assembles a View session: descriptor, track mirror, resumable stream, and invocations. */
 import {ConnectionError, readBoundedJson, requestOptions} from './http.mjs';
 import {StreamClient} from './stream.mjs';
@@ -21,6 +21,7 @@ export async function openSession({origin, credential, fetcher = (...args) => gl
   let current = 'connecting', closed = false;
   const names = [...descriptor.tracks.map(track => track.name), INVOCATIONS_TRACK];
   store.runId = descriptor.runId;
+  for (const track of descriptor.tracks) if (track.style === 'log') store.limit(track.name, track.maxItems);
 
   async function snapshot(name) {
     if (closed) return;

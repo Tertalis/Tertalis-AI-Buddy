@@ -1,4 +1,4 @@
-# file: first-party/frontendHost/channel.py ; version: 2
+# file: first-party/frontendHost/channel.py ; version: 3
 """Thread-safe delivery seam between HTTP threads and the Application's loop owner.
 
 HTTP threads only submit Invocations and read Emits/snapshots. The loop owner
@@ -60,16 +60,28 @@ class FrontendChannel:
 
     # ----- loop owner side -------------------------------------------------
 
-    def declareTrack(self, name: str, style: str, *, initial: object = None) -> None:
-        """Declares a 'state' (latest value) or 'log' (append) track; declaring twice is an error."""
+    def declareTrack(self, name: str, style: str, *, initial: object = None, maxItems: int | None = None) -> None:
+        """Declares a 'state' (latest value) or 'log' (append) track; declaring twice is an error.
+
+        maxItems bounds a log track's retained tail below the channel-wide logTail
+        (older items are released; Views learn the bound from the session descriptor).
+        """
         name = requireTrackName(name)
         if name == INVOCATIONS_TRACK:
             raise ValueError("The invocations track is reserved.")
+        if maxItems is not None and (style != "log" or type(maxItems) is not int or not 1 <= maxItems <= self._logTail):
+            raise ValueError(f"maxItems applies to log tracks and must be 1..{self._logTail}.")
         with self._condition:
             self._requireOpen()
-            self._declare(name, style)
+            self._declare(name, style, maxItems=maxItems)
             if style == "state":
                 self._tracks[name].value = self._encodeValue(initial)
+
+    def describeTracks(self) -> list[dict]:
+        """Declared tracks for the session descriptor: name, style and, for logs, maxItems."""
+        with self._condition:
+            return [{"name": name, "style": track.style, **({"maxItems": track.items.maxlen} if track.style == "log" else {})}
+                    for name, track in self._tracks.items() if name != INVOCATIONS_TRACK]
 
     def tracks(self) -> tuple[tuple[str, str], ...]:
         """Declared (name, style) pairs, reserved track excluded, in declaration order."""
@@ -203,12 +215,12 @@ class FrontendChannel:
 
     # ----- internals ---------------------------------------------------------
 
-    def _declare(self, name: str, style: str) -> None:
+    def _declare(self, name: str, style: str, *, maxItems: int | None = None) -> None:
         if style not in _STYLES:
             raise ValueError(f"Track style must be 'state' or 'log', not {style!r}.")
         if name in self._tracks:
             raise ValueError(f"Track already declared: {name}.")
-        self._tracks[name] = _Track(style=style, items=deque(maxlen=self._logTail), events=deque(maxlen=self._replay))
+        self._tracks[name] = _Track(style=style, items=deque(maxlen=maxItems or self._logTail), events=deque(maxlen=self._replay))
 
     def _requireOpen(self) -> None:
         if self._closed:

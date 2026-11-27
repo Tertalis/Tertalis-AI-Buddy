@@ -11,7 +11,7 @@ Design: `design/working/browser-frontend-checkpoint-01.txt`.
 | Module | Purpose |
 |---|---|
 | `http.mjs` | `MAX_BODY`, `ConnectionError`, `BodyError`, `readBoundedJson`, `requestOptions` (no cookies, cache, redirects or referrer), `requireLoopbackOrigin`, `isCredential`. Shared with `tools/observationViewer`. |
-| `credential.mjs` | `takeFragmentCredential()`: reads `#token=…`, removes it with `history.replaceState`, keeps it in memory only. |
+| `credential.mjs` | `launchCredential()`: reads `#token=...`, removes it with `history.replaceState`, and remembers it in this tab's `sessionStorage` (key `tertalis.frontend.credential`) so F5 / Ctrl+F5 work; `forgetCredential()` once the host rejects it. The only module that uses storage. |
 | `eventStream.mjs` | Bounded `text/event-stream` parser over a `fetch` body (EventSource cannot send `Authorization`). |
 | `stream.mjs` | `StreamClient`: one resumable stream per View; resumes with per-track positions; backs off; stops on 401/403/404. |
 | `tracks.mjs` | `TrackStore`: state and log tracks, in-order application, gap detection, bounded log tail. |
@@ -31,6 +31,6 @@ restart) settles pending actions as `unknown`. A fresh launch link is required
 after credential rotation; existing tabs do not acquire the new credential.
 
 Rules kept by every module (checked by
-`tests/first_party/frontendKit/kit.test.mjs`): no browser storage, cookies,
-console logging, HTML-string sinks or `eval`; every module is declared in the
-manifest.
+`tests/first_party/frontendKit/kit.test.mjs`): only `credential.mjs` may use
+tab session storage; no localStorage, IndexedDB, cookies, console logging,
+HTML-string sinks or `eval`; every module is declared in the manifest.

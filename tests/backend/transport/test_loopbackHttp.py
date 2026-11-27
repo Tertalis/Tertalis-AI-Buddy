@@ -1,7 +1,8 @@
-# file: tests/backend/transport/test_loopbackHttp.py ; version: 1
+# file: tests/backend/transport/test_loopbackHttp.py ; version: 2
 """Shared loopback HTTP mechanics: binding, header checks, connection cap, quiet close."""
 from __future__ import annotations
 
+import os
 import socket
 import time
 from email.message import Message
@@ -38,6 +39,17 @@ def test_binding_is_literal_loopback_only():
     server = LoopbackHttpServer(0, QuietHandler, isStopping=lambda: False)
     try:
         assert server.authority == f"127.0.0.1:{server.server_port}"
+    finally:
+        server.server_close()
+
+
+def test_restart_reuse_policy_preserves_a_single_listener():
+    server = LoopbackHttpServer(0, QuietHandler, isStopping=lambda: False)
+    try:
+        assert server.allow_reuse_address is (os.name != "nt")
+        assert bool(server.socket.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)) is (os.name != "nt")
+        with pytest.raises(OSError):
+            LoopbackHttpServer(server.server_port, QuietHandler, isStopping=lambda: False)
     finally:
         server.server_close()
 

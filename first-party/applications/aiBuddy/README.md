@@ -82,9 +82,12 @@ How it is implemented and why: `ai-buddy-implementation-design.txt`.
   `--open` to open it). Open it in any local browser, in one or more tabs:
   conversation with an input box, live inference output with Stop, the
   breakpoint editor (replace prompt or response, Continue), things to do,
-  situation, Minesweeper board, diagnostics, and developer tools for every
-  read and intervention the terminal offers. The link carries a private
-  access token after `#`; it changes every start. `/ui` prints it again;
+  situation, Minesweeper board, diagnostics, the last 200 inferences, and
+  developer tools for every read and intervention the terminal offers.
+  Clicking an inference (or any record id in diagnostics) shows what was sent
+  to the model and what came back, loaded on demand. The link carries a
+  private access token after `#`; it changes every start. F5 / Ctrl+F5 keep
+  working in that tab; a new tab needs the link (`/ui` prints it again).
   `--no-ui` runs terminal only; `--ui-port` fixes the port.
 
 ## Layout

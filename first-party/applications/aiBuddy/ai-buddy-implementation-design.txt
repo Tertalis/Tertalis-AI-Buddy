@@ -354,7 +354,9 @@ Platform design: Tertalis design/working/browser-frontend-checkpoint-01.txt.
 17.03. Tracks: aibuddy.loop (flags, published at once), aibuddy.status and
        aibuddy.game (refreshed through the loop when something changed),
        aibuddy.breakpoint, aibuddy.inference (live partial output, last
-       record), aibuddy.conversation and aibuddy.diagnostics (logs).
+       finished summary), aibuddy.inferences (summaries of the last 200
+       finished inferences), aibuddy.conversation and aibuddy.diagnostics
+       (logs).
 17.04. Invocations: aiBuddy.say, breakpoints, continue, replacePrompt,
        replaceOutput, pause, interrupt (Stop), quiesce, unquiesce, save;
        aiBuddy.read and aiBuddy.intervene limited to explicit allow-lists
@@ -371,6 +373,18 @@ Platform design: Tertalis design/working/browser-frontend-checkpoint-01.txt.
 17.07. The UI is plain ES modules with DOM text only (no HTML strings),
        styles as a constructed stylesheet, and every module declared in the
        manifest because the frontend host serves only declared sources.
+17.08. Inference history: tracks carry summaries only (id, state,
+       undertaking, duration, edit flags), never prompts or outputs. What
+       was sent and received (and the built prompt or generated response
+       when a developer replaced them) is read on demand from AI Buddy state
+       through aiBuddy.read of aiBuddy.debug.record.describe@1, shown in one
+       record viewer and released when it is closed or another record is
+       opened. Record ids in diagnostics open the same viewer. The host
+       releases summaries beyond 200; the records themselves stay in state
+       (their growth is the separate storage question, G7 and backlog).
+17.09. Reload: the browser keeps the launch token in the tab's
+       sessionStorage (frontend kit), so F5 / Ctrl+F5 reconnect; it is gone
+       when the tab closes and forgotten once the host rejects it.
 
 18. OPEN QUESTIONS
 

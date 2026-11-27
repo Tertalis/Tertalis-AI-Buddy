@@ -1,9 +1,9 @@
-// file: tests/first_party/frontendKit/kit.test.mjs ; version: 2
+// file: tests/first_party/frontendKit/kit.test.mjs ; version: 3
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync, readdirSync} from 'node:fs';
 import {MAX_BODY, BodyError, ConnectionError, readBoundedJson, requestOptions, requireLoopbackOrigin, isCredential} from '../../../first-party/frontendKit/http.mjs';
-import {takeFragmentCredential} from '../../../first-party/frontendKit/credential.mjs';
+import {STORAGE_KEY, forgetCredential, launchCredential, rememberedCredential, takeFragmentCredential} from '../../../first-party/frontendKit/credential.mjs';
 import {readEvents, StreamFormatError} from '../../../first-party/frontendKit/eventStream.mjs';
 import {TrackStore, INVOCATIONS_TRACK} from '../../../first-party/frontendKit/tracks.mjs';
 import {StreamClient, streamUrl} from '../../../first-party/frontendKit/stream.mjs';
@@ -56,10 +56,29 @@ test('bounded JSON rejects wrong type, oversized length, oversized stream and ba
   class Custom extends Error {}
   await assert.rejects(readBoundedJson(json('x'), {limit: 1, invalid: () => new Custom()}), Custom);
 });
-test('fragment credential is taken once and removed from the address bar', () => {
+/** Minimal per-tab Storage stand-in. */
+function memoryStorage() {
+  const map = new Map();
+  return {map, getItem: key => map.has(key) ? map.get(key) : null, setItem: (key, value) => map.set(key, String(value)), removeItem: key => map.delete(key)};
+}
+test('fragment credential is taken once, removed from the address bar, and remembered for this tab', () => {
   const calls = [];
   const history = {replaceState: (...args) => calls.push(args)};
-  assert.equal(takeFragmentCredential({hash: '#token=' + TOKEN, pathname: '/', search: ''}, history), TOKEN);
+  const storage = memoryStorage();
+  assert.equal(takeFragmentCredential({hash: '#token=' + TOKEN, pathname: '/', search: ''}, history, storage), TOKEN);
+  assert.deepEqual([...storage.map], [[STORAGE_KEY, TOKEN]]);
+  assert.equal(rememberedCredential(storage), TOKEN, 'F5 / Ctrl+F5 reuse it');
+  assert.equal(launchCredential({hash: '', pathname: '/', search: ''}, history, storage), TOKEN);
+  const other = 'B'.repeat(43);
+  assert.equal(launchCredential({hash: '#token=' + other, pathname: '/', search: ''}, history, storage), other, 'a fresh link wins');
+  forgetCredential(storage);
+  assert.equal(rememberedCredential(storage), null);
+  storage.setItem(STORAGE_KEY, 'bad'); assert.equal(rememberedCredential(storage), null, 'malformed remembered values are ignored');
+  const throwing = {getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); }, removeItem() { throw new Error('blocked'); }};
+  assert.equal(takeFragmentCredential({hash: '#token=' + TOKEN, pathname: '/', search: ''}, history, throwing), TOKEN, 'blocked storage only costs reload');
+  assert.equal(rememberedCredential(throwing), null); forgetCredential(throwing);
+  calls.length = 0;
+  assert.equal(takeFragmentCredential({hash: '#token=' + TOKEN, pathname: '/', search: ''}, history, null), TOKEN);
   assert.deepEqual(calls, [[null, '', '/']]);
   assert.equal(takeFragmentCredential({hash: '#token=bad', pathname: '/', search: ''}, history), null);
   assert.equal(calls.length, 2, 'malformed fragments are removed too');
@@ -235,10 +254,24 @@ test('credential rotation on restart settles accepted actions as unknown', async
     assert.equal(c.tasks.size, 0); session.close();
 });
 
+test('bootstrap reuses this tab\'s credential on reload and forgets a rejected one', async () => {
+  const elements = {'boot-status': {textContent: ''}, app: {}};
+  const document = {title: '', getElementById: id => elements[id]};
+  const storage = memoryStorage(); storage.setItem(STORAGE_KEY, TOKEN);
+  const seen = [];
+  const rejected = await boot({document, location: {hash: '', origin: ORIGIN, pathname: '/', search: ''}, history: {}, storage,
+    fetcher: async (url, options) => { seen.push(options.headers.Authorization); return new Response('', {status: 401}); }});
+  assert.equal(rejected, null); assert.deepEqual(seen, ['Bearer ' + TOKEN]);
+  assert.equal(storage.getItem(STORAGE_KEY), null); assert.match(elements['boot-status'].textContent, /newest link/);
+  storage.setItem(STORAGE_KEY, TOKEN);
+  const down = await boot({document, location: {hash: '', origin: ORIGIN, pathname: '/', search: ''}, history: {}, storage,
+    fetcher: async () => { throw new TypeError('offline'); }});
+  assert.equal(down, null); assert.equal(storage.getItem(STORAGE_KEY), TOKEN, 'an unreachable host does not forget the credential');
+});
 test('bootstrap needs the fragment credential and mounts the configured main entry', async () => {
   const elements = {'boot-status': {textContent: ''}, app: {}};
   const document = {title: '', getElementById: id => elements[id]};
-  const none = await boot({document, location: {hash: '', origin: ORIGIN, pathname: '/', search: ''}, history: {}, fetcher: async () => { throw new Error('no fetch'); }});
+  const none = await boot({document, location: {hash: '', origin: ORIGIN, pathname: '/', search: ''}, history: {}, storage: memoryStorage(), fetcher: async () => { throw new Error('no fetch'); }});
   assert.equal(none, null); assert.match(elements['boot-status'].textContent, /full link/);
   let mounted = null; let source;
   const fetcher = async url => {
@@ -248,16 +281,26 @@ test('bootstrap needs the fragment credential and mounts the configured main ent
   };
   const replaced = [];
   const session = await boot({document, location: {hash: '#token=' + TOKEN, origin: ORIGIN, pathname: '/', search: ''},
-    history: {replaceState: (...a) => replaced.push(a)}, fetcher,
+    history: {replaceState: (...a) => replaced.push(a)}, fetcher, storage: memoryStorage(),
     importer: async url => { assert.equal(url, '/pack/app/ui/main.mjs'); return {mount: (root, s) => { mounted = {root, s}; }}; }});
   assert.equal(mounted.root, elements.app); assert.equal(mounted.s, session); assert.equal(document.title, 'T'); assert.equal(replaced.length, 1);
   session.close();
 });
-test('kit sources have no storage, cookies, console logging or HTML injection sinks', () => {
+test('kit sources have no storage (except the tab credential), cookies, console logging or HTML injection sinks', () => {
   for (const name of readdirSync(KIT).filter(item => item.endsWith('.mjs'))) {
     const source = readFileSync(new URL(name, KIT), 'utf8');
-    assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB|document\.cookie|console\.|innerHTML|outerHTML|insertAdjacentHTML|sendBeacon|eval\(/, name);
+    assert.doesNotMatch(source, /localStorage|indexedDB|document\.cookie|console\.|innerHTML|outerHTML|insertAdjacentHTML|sendBeacon|eval\(/, name);
+    if (name !== 'credential.mjs') assert.doesNotMatch(source, /sessionStorage/, name);
   }
+});
+test('per-track log limits from the descriptor bound the client mirror', () => {
+  const store = new TrackStore({maxLogItems: 10});
+  store.limit('small', 2); store.limit('huge', 50);
+  store.applySnapshot({track: 'small', style: 'log', position: 3, items: [1, 2, 3]});
+  assert.deepEqual(store.get('small').items, [2, 3]);
+  store.apply({track: 'small', position: 4, kind: 'append', value: 4});
+  assert.deepEqual(store.get('small').items, [3, 4]);
+  assert.equal(store.maxItems('huge'), 10, 'never above the store-wide bound');
 });
 test('every kit module is declared in the manifest so the host can serve it', () => {
   const manifest = JSON.parse(readFileSync(new URL('manifest.json', KIT), 'utf8'));

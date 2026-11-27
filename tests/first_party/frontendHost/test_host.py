@@ -1,4 +1,4 @@
-# file: tests/first_party/frontendHost/test_host.py ; version: 2
+# file: tests/first_party/frontendHost/test_host.py ; version: 3
 """Actual Pack activation and loopback HTTP: sealing, sources, authentication, invocations, streams."""
 from __future__ import annotations
 
@@ -40,10 +40,12 @@ def test_session_descriptor_names_main_and_tracks(fh, runtimeHost):
     runtime = fh.createApplication(runtimeHost)
     channel, client = connect(fh, runtime)
     channel.declareTrack("status", "state", initial={"busy": False})
+    channel.declareTrack("history", "log", maxItems=200)
     status, _headers, body = client.get("/session")
     assert status == 200
     assert json.loads(body) == {"runId": channel.runId, "title": "Test", "main": "/pack/test.app/ui/main.mjs",
-                                "tracks": [{"name": "status", "style": "state"}]}
+                                "tracks": [{"name": "status", "style": "state"},
+                                           {"name": "history", "style": "log", "maxItems": 200}]}
     assert json.loads(client.get("/snapshot?track=status")[2])["value"] == {"busy": False}
     assert client.get("/snapshot?track=nope")[0] == 404
     assert client.get("/snapshot?track=status&x=1")[0] == 400

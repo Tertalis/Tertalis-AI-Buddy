@@ -1,4 +1,4 @@
-// file: tests/first_party/frontendHost/browser-smoke.cjs ; version: 2
+// file: tests/first_party/frontendHost/browser-smoke.cjs ; version: 3
 /** Real browser driver; the launch URL arrives via private stdin and is never printed or logged. */
 const {createInterface} = require('node:readline');
 const {createRequire} = require('node:module');
@@ -12,11 +12,13 @@ lines.on('line', line => { const value = JSON.parse(line); if (waiting.length) w
 const next = () => buffered.length ? Promise.resolve(buffered.shift()) : new Promise(resolve => waiting.push(resolve));
 async function control(action) { process.stdout.write(JSON.stringify({action}) + '\n'); assert.equal((await next()).ok, true); }
 
-/** Credential lifetime and privacy: gone from the address bar, page, storage and cookies. */
+/** Credential lifetime and privacy: gone from the address bar, page, cookies and localStorage;
+ *  kept only under one key in this tab's sessionStorage so F5 / Ctrl+F5 can reload. */
 async function privacy(page, token) {
   assert.equal(page.url().includes(token), false);
   assert.equal((await page.content()).includes(token), false);
-  assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0);
+  assert.equal(await page.evaluate(() => localStorage.length), 0);
+  assert.deepEqual(await page.evaluate(() => Object.keys(sessionStorage)), ['tertalis.frontend.credential']);
   assert.equal(await page.evaluate(() => document.cookie), '');
 }
 const text = (page, id) => page.locator('#' + id).textContent();
@@ -44,6 +46,12 @@ const text = (page, id) => page.locator('#' + id).textContent();
     await privacy(first, token);
     assert.equal(await text(first, 'status'), '{"step":0}');
     assert.equal(await first.title(), 'Frontend smoke');
+
+    await first.reload();
+    await first.waitForSelector('#app[data-ready="1"]');
+    await first.waitForFunction(() => document.getElementById('connection').textContent === 'connected');
+    assert.equal(await text(first, 'status'), '{"step":0}', 'reload keeps the View without the link');
+    await privacy(first, token);
 
     await first.locator('#echo').click();
     await first.waitForFunction(() => document.getElementById('result').textContent.startsWith('result:'));
@@ -87,13 +95,17 @@ const text = (page, id) => page.locator('#' + id).textContent();
     for (const page of [first, second])
       await page.waitForFunction(() => document.getElementById('connection').textContent === 'unauthorized');
     await first.screenshot({path: path.join(process.argv[4], 'host-restarted.png')});
+    assert.deepEqual(await first.evaluate(() => Object.keys(sessionStorage)), [], 'a rejected credential is forgotten');
+    await second.reload();
+    await second.waitForFunction(() => /full link|newest link/.test(document.getElementById('boot-status').textContent));
+    assert.deepEqual(await second.evaluate(() => Object.keys(sessionStorage)), []);
     await control('close-host');
 
     assert.equal(errors.length, 0, 'page errors: ' + errors.join(','));
     assert.ok(requested.every(url => !url.includes(token) || url.endsWith('#token=' + token)), 'credential only ever in the navigation fragment');
     assert.ok(requested.filter(url => url.includes('?')).every(url => !/token|credential/i.test(new URL(url).search)));
     process.stdout.write(JSON.stringify({result: 'passed', browser: await browser.version(), views: 5, viewLimitEnforced: true,
-      conflictResolved: true, restartPendingUnknown: true, screenshots: ['two-views', 'host-restarted']}) + '\n');
+      conflictResolved: true, restartPendingUnknown: true, reloadKeepsView: true, rejectedCredentialForgotten: true, screenshots: ['two-views', 'host-restarted']}) + '\n');
   } catch (error) {
     await pages[0]?.screenshot({path: path.join(process.argv[4], 'diagnostic.png')}).catch(() => {});
     process.stderr.write(JSON.stringify({error: error.message.replaceAll(token, '<token>'), pageErrorTypes: errors}) + '\n');

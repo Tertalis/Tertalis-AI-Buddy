@@ -1,8 +1,8 @@
-// file: first-party/applications/aiBuddy/pack/ui/model.mjs ; version: 1
+// file: first-party/applications/aiBuddy/pack/ui/model.mjs ; version: 2
 /** Pure view-model functions from track values (DOM-free, Node-testable). */
 export const TRACKS = {
   loop: 'aibuddy.loop', status: 'aibuddy.status', breakpoint: 'aibuddy.breakpoint', inference: 'aibuddy.inference',
-  game: 'aibuddy.game', conversation: 'aibuddy.conversation', diagnostics: 'aibuddy.diagnostics',
+  game: 'aibuddy.game', conversation: 'aibuddy.conversation', diagnostics: 'aibuddy.diagnostics', inferences: 'aibuddy.inferences',
 };
 export const READS = [
   ['aiBuddy.debug.status@1', 'Status', null],
@@ -58,10 +58,46 @@ export function breakpointModel(pause) {
     title: output ? 'Response received, not yet acted on' : 'About to run inference',
     replaceTarget: output ? 'aiBuddy.replaceOutput' : 'aiBuddy.replacePrompt', replaceLabel: output ? 'Replace response' : 'Replace prompt'};
 }
-export function inferenceSummary(record) {
-  if (!record) return null;
-  const seconds = record.timing?.durationNs ? (record.timing.durationNs / 1e9).toFixed(2) + ' s' : null;
-  return {id: record.id, state: record.state, seconds, workId: record.workId ?? null, rawOutput: record.rawOutput ?? record.generatedOutput ?? ''};
+/** List/summary view of a finished inference (the bridge publishes summaries, not prompts). */
+export function inferenceSummary(summary) {
+  if (!summary) return null;
+  const ns = summary.durationNs ?? summary.timing?.durationNs;
+  const seconds = ns ? (ns / 1e9).toFixed(2) + ' s' : null;
+  const edits = [summary.promptEdited ? 'prompt edited' : null, summary.outputEdited ? 'response replaced' : null].filter(Boolean);
+  return {id: summary.id, state: summary.state, seconds, workId: summary.workId ?? null, purpose: summary.purpose ?? null,
+    edits, error: summary.error ?? null, at: summary.at ?? null};
+}
+/** Record ids as written in diagnostics and records (e.g. i000012, w000003, m000001). */
+export const RECORD_ID = /\b[a-z]\d{6}\b/g;
+/** Splits text into plain parts and record-id parts, for clickable references. */
+export function splitRecordIds(text) {
+  const parts = []; let last = 0;
+  for (const match of String(text).matchAll(RECORD_ID)) {
+    if (match.index > last) parts.push({text: text.slice(last, match.index)});
+    parts.push({id: match[0]}); last = match.index + match[0].length;
+  }
+  if (last < String(text).length) parts.push({text: String(text).slice(last)});
+  return parts;
+}
+/** Detail view of a stored record: what an inference sent and received, with developer edits shown. */
+export function recordView(record) {
+  if (!record || typeof record !== 'object') return {kind: 'missing', sections: [], meta: []};
+  if (typeof record.id !== 'string' || record.id[0] !== 'i') return {kind: 'record', sections: [], meta: [], json: record};
+  const sent = record.submittedPrompt ?? record.prompt ?? null;
+  const sections = [];
+  if (sent !== null) sections.push({title: record.submittedPrompt ? 'Sent to the model' : 'Prompt (not sent yet)', text: sent});
+  if (record.builtPrompt && sent !== null && record.builtPrompt !== sent) sections.push({title: 'Built prompt (before developer edit)', text: record.builtPrompt});
+  if (record.generatedOutput !== undefined) sections.push({title: 'Received from the model', text: record.generatedOutput});
+  if (record.rawOutput !== undefined && record.rawOutput !== record.generatedOutput) sections.push({title: 'Acted on (developer-replaced response)', text: record.rawOutput});
+  if (record.error) sections.push({title: 'Error', text: String(record.error)});
+  const ns = record.timing?.durationNs;
+  const meta = [
+    ['state', record.state], ['undertaking', record.workId], ['purpose', record.purpose],
+    ['model', [record.provider, record.model].filter(Boolean).join(' / ') || null],
+    ['duration', ns ? (ns / 1e9).toFixed(2) + ' s' : null], ['generated', record.generatedAt],
+    ['interventions', Array.isArray(record.interventions) && record.interventions.length ? String(record.interventions.length) : null],
+  ].filter(([, value]) => value !== null && value !== undefined && value !== '');
+  return {kind: 'inference', sections, meta, json: record};
 }
 /** Parses the developer payload box; empty means no payload. Throws SyntaxError with a readable message. */
 export function parsePayload(text) {

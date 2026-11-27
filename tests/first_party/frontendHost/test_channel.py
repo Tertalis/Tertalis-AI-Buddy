@@ -1,4 +1,4 @@
-# file: tests/first_party/frontendHost/test_channel.py ; version: 2
+# file: tests/first_party/frontendHost/test_channel.py ; version: 3
 """Delivery seam: bounded, ordered, idempotent, thread-safe; never calls the runtime."""
 from __future__ import annotations
 
@@ -172,3 +172,21 @@ def test_channel_limits_must_be_positive_integers(limit):
     for name in ("maxInbox", "replay", "logTail", "idempotency"):
         with pytest.raises(ValueError):
             FrontendChannel(runId="r", **{name: limit})
+
+
+def test_log_tracks_may_retain_fewer_items_than_the_channel():
+    channel = FrontendChannel(runId="r", logTail=5)
+    channel.declareTrack("recent", "log", maxItems=2)
+    channel.declareTrack("all", "log")
+    for value in range(4):
+        channel.append("recent", value)
+        channel.append("all", value)
+    assert channel.snapshot("recent")["items"] == [2, 3]
+    assert channel.snapshot("all")["items"] == [0, 1, 2, 3]
+    assert channel.describeTracks() == [{"name": "recent", "style": "log", "maxItems": 2},
+                                        {"name": "all", "style": "log", "maxItems": 5}]
+    for bad in ({"maxItems": 0}, {"maxItems": 6}, {"maxItems": "2"}):
+        with pytest.raises(ValueError):
+            channel.declareTrack("x" + str(len(str(bad))), "log", **bad)
+    with pytest.raises(ValueError):
+        channel.declareTrack("st", "state", maxItems=2)

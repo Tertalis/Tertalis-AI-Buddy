@@ -1,4 +1,4 @@
-// file: first-party/applications/aiBuddy/pack/ui/style.mjs ; version: 2
+// file: first-party/applications/aiBuddy/pack/ui/style.mjs ; version: 3
 /** Styles as a constructed stylesheet (no inline style, no extra asset kind). */
 const CSS = `
 :root { color-scheme: light dark; --bg: Canvas; --fg: CanvasText; --line: color-mix(in srgb, CanvasText 18%, transparent);
@@ -39,6 +39,14 @@ table { border-collapse: collapse; width: 100%; } td, th { text-align: left; pad
 .diagnostics ol { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; font: 12px/1.4 ui-monospace, monospace; }
 .diagnostics li time { color: var(--muted); margin-right: 6px; }
 .hidden { display: none; }
+button.ref { padding: 0 4px; border: none; color: var(--accent); text-decoration: underline; font: inherit; }
+.inferences ol { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
+.inferences li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.inferences li .state-failed { color: var(--bad); }
+.viewer h2 { text-transform: none; letter-spacing: 0; }
+.viewer h3 { font-size: 12px; margin: 10px 0 4px; color: var(--muted); }
+.viewer dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; font-size: 12px; }
+.viewer dt { color: var(--muted); } .viewer dd { margin: 0; }
 #tool-select, #tool-payload { display: block; width: 100%; box-sizing: border-box; margin-bottom: 6px; }
 @media (max-width: 800px) { .app { grid-template-columns: 1fr; height: auto; } }
 `;

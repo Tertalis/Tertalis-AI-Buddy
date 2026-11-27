@@ -1,8 +1,8 @@
-// file: tests/first_party/applications/aiBuddy/ui.test.mjs ; version: 1
+// file: tests/first_party/applications/aiBuddy/ui.test.mjs ; version: 2
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync, readdirSync} from 'node:fs';
-import {breakpointModel, connectionLabel, inferenceSummary, INTERVENTIONS, lifecycleText, loopBadges, openWork, parsePayload, READS} from '../../../../first-party/applications/aiBuddy/pack/ui/model.mjs';
+import {breakpointModel, connectionLabel, inferenceSummary, INTERVENTIONS, lifecycleText, loopBadges, openWork, parsePayload, READS, recordView, splitRecordIds} from '../../../../first-party/applications/aiBuddy/pack/ui/model.mjs';
 
 const UI = new URL('../../../../first-party/applications/aiBuddy/pack/ui/', import.meta.url);
 const PACK = new URL('../../../../first-party/applications/aiBuddy/pack/', import.meta.url);
@@ -23,8 +23,8 @@ test('breakpoint model maps phases to the right action', () => {
   assert.equal(output.replaceTarget, 'aiBuddy.replaceOutput'); assert.equal(output.text, '');
 });
 test('inference summary and payload parsing', () => {
-  assert.deepEqual(inferenceSummary({id: 'i1', state: 'completed', timing: {durationNs: 1.5e9}, rawOutput: 'x'}),
-    {id: 'i1', state: 'completed', seconds: '1.50 s', workId: null, rawOutput: 'x'});
+  assert.deepEqual(inferenceSummary({id: 'i1', state: 'completed', durationNs: 1.5e9, workId: 'w1', purpose: 'task', promptEdited: true, outputEdited: false, at: 'T'}),
+    {id: 'i1', state: 'completed', seconds: '1.50 s', workId: 'w1', purpose: 'task', edits: ['prompt edited'], error: null, at: 'T'});
   assert.equal(parsePayload('  '), null);
   assert.deepEqual(parsePayload('{"a": 1}'), {a: 1});
   assert.throws(() => parsePayload('[1]'), SyntaxError);
@@ -45,4 +45,21 @@ test('every UI module is declared, and sources stay text-only and ASCII', () => 
     assert.doesNotMatch(source, /innerHTML|outerHTML|insertAdjacentHTML|localStorage|sessionStorage|document\.cookie|console\.|eval\(/, file);
     assert.doesNotMatch(source, /[^\x00-\x7F]/, file + ' must be ASCII');
   }
+});
+
+test('record ids in diagnostics become references', () => {
+  assert.deepEqual(splitRecordIds('inference i000012 for w000003 done'),
+    [{text: 'inference '}, {id: 'i000012'}, {text: ' for '}, {id: 'w000003'}, {text: ' done'}]);
+  assert.deepEqual(splitRecordIds('no ids here 1234567'), [{text: 'no ids here 1234567'}]);
+});
+test('inference records show what was sent and received, and developer edits', () => {
+  const plain = recordView({id: 'i000001', state: 'completed', builtPrompt: 'P', prompt: 'P', submittedPrompt: 'P', generatedOutput: 'O', rawOutput: 'O', timing: {durationNs: 2e9}});
+  assert.deepEqual(plain.sections.map(section => section.title), ['Sent to the model', 'Received from the model']);
+  assert.ok(plain.meta.some(([name, value]) => name === 'duration' && value === '2.00 s'));
+  const edited = recordView({id: 'i000002', builtPrompt: 'P', prompt: 'E', submittedPrompt: 'E', generatedOutput: 'O', rawOutput: 'R'});
+  assert.deepEqual(edited.sections.map(section => section.text), ['E', 'P', 'O', 'R']);
+  const prepared = recordView({id: 'i000003', state: 'prepared', builtPrompt: 'P', prompt: 'P'});
+  assert.deepEqual(prepared.sections.map(section => section.title), ['Prompt (not sent yet)']);
+  assert.equal(recordView({id: 'w000001'}).kind, 'record');
+  assert.equal(recordView(null).kind, 'missing');
 });

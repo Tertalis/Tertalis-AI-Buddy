@@ -33,6 +33,7 @@ The loop owner (host code that drives the Application) then calls, once:
 channel = runtime.invokeCapability("frontend.host.channel@1")   # seals served sources
 print(runtime.invokeCapability("frontend.host.connection@1")["url"])
 channel.declareTrack("status", "state", initial={...})
+channel.declareTrack("history", "log", maxItems=200)   # older items are released
 channel.set("status", {...})            # any thread; values frozen as JSON
 for item in channel.waitInvocations(timeout):   # Invocation(invocationId, target, arguments, expect)
     channel.resolve(item.invocationId, value)   # or channel.fail(item.invocationId, "conflict", "...")
@@ -71,7 +72,8 @@ exact Host, exact same Origin, constant-time Bearer, no logging, `no-store`,
 restrictive CSP, bounded bodies, connection cap. Recorded deviation: the launch
 URL carries the credential in its fragment (`#token=`); fragments are never
 sent to the server, the page removes it with `history.replaceState` and keeps
-it in memory only. Query-string credentials are rejected. Bootstrap and Pack
+it in this tab's `sessionStorage` so reloading works (per tab, gone when the tab
+closes, forgotten when rejected, e.g. after a restart rotated it). Query-string credentials are rejected. Bootstrap and Pack
 sources need no credential because browser module imports cannot send one;
 they are public code and still Host-checked.
 

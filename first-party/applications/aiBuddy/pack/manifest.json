@@ -16,6 +16,8 @@
     {"id": "ui.panels.status", "source": "ui/panels/status.mjs", "format": "js-module-source@1", "role": "library"},
     {"id": "ui.panels.game", "source": "ui/panels/game.mjs", "format": "js-module-source@1", "role": "library"},
     {"id": "ui.panels.diagnostics", "source": "ui/panels/diagnostics.mjs", "format": "js-module-source@1", "role": "library"},
-    {"id": "ui.panels.tools", "source": "ui/panels/tools.mjs", "format": "js-module-source@1", "role": "library"}
+    {"id": "ui.panels.tools", "source": "ui/panels/tools.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.records", "source": "ui/panels/records.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.inferences", "source": "ui/panels/inferences.mjs", "format": "js-module-source@1", "role": "library"}
   ]
 }

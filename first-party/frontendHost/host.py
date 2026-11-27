@@ -1,4 +1,4 @@
-# file: first-party/frontendHost/host.py ; version: 2
+# file: first-party/frontendHost/host.py ; version: 3
 """Loopback browser frontend host: serves declared browser CodeEntries and one channel per run.
 
 Security posture follows G-01 (literal 127.0.0.1, exact Host, no logging,
@@ -181,7 +181,7 @@ class FrontendHost:
         if channel is None:
             return None
         return {"runId": self.runId, "title": self._title, "main": self._mainUrl,
-                "tracks": [{"name": name, "style": style} for name, style in channel.tracks()]}
+                "tracks": channel.describeTracks()}
 
 
 class _Server(ThreadingLoopbackHttpServer):

@@ -1,6 +1,6 @@
 # Tertalis AI Buddy
 
-**Status: experimental terminal application; initial checkpoints A-F implemented.**
+**Status: experimental terminal and browser application; checkpoints A-G implemented.**
 
 AI Buddy is a continuously running, locally oriented Tertalis AppPack with
 personality, memory, work scheduling, developer breakpoints, Minesweeper,
@@ -10,22 +10,23 @@ configuration, developer commands and experimental limits.
 
 The AppPack and terminal launcher live under `first-party/applications/aiBuddy/`;
 application tests live under `tests/first_party/applications/aiBuddy/`.
-Browser UI integration and voice features remain future work.
+The browser UI includes recent inference history and on-demand record details.
+Voice features remain future work.
 
 ## Adopted platform
 
 This combined checkout adopts Tertalis/Tertalis `integration` commit
-`82772a2ff6cc48a9fb8e776654b2a14bb119b6d7` (2026-11-27), replacing the
+`f26210af0d179dc29ecc0543cbbb035efa7ebc5d` (2026-11-27), replacing the
 historical synchronized baseline `f30c393f7d723f9f8a897ff74a054aed1a1e4cd4`.
 All 282 shared platform paths match that target. Platform `docs/`, `design/`
 and operational `ai-workflow/` files are excluded; the application routing
 stub and application-owned orientation are preserved.
 
-Independent Windows/Python 3.15 adoption check: 1,876 tests passed, including
-AI Buddy's 63 scripted-provider tests. Native Ruff/ty tool verification and
-the imported frontend host's Chromium five-View/restart fixture smoke passed.
-This does not establish live model behavior. The new `frontend.kit` and
-`frontend.host` Packs are available; AI Buddy's launcher remains terminal-based.
+Independent Windows/Python 3.15 review: 1,891 combined tests passed. Affected
+Python Ruff checks, the platform Chromium five-View/restart/reload smoke,
+and an AI Buddy scripted-provider browser check passed. The application check
+covered inference details, diagnostic links, closing the viewer, and normal
+and cache-disabled refresh. This does not establish live model behavior.
 
 ## Getting the development environment ready
 
@@ -58,8 +59,8 @@ their documented environment or external prerequisites.
 ## Development direction and boundaries
 
 AI Buddy currently uses the first-party llama.cpp provider in external mode,
-with an application-owned loop driving Jobs and terminal controls. Browser UI,
-managed provider adoption and voice capabilities remain separate work.
+with an application-owned loop driving Jobs and terminal and browser controls.
+Managed provider adoption and voice capabilities remain separate work.
 
 The AI Buddy workstream owns application-specific behavior. Reusable
 runtime, hosting, communication and service facilities belong to the
