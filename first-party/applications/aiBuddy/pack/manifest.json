@@ -3,6 +3,19 @@
   "kind": "appPack",
   "version": "0.1.0",
   "codeEntries": [
-    {"id": "buddy", "source": "codeEntry.py"}
+    {"id": "buddy", "source": "codeEntry.py"},
+    {"id": "ui", "source": "ui/main.mjs", "format": "js-module-source@1"},
+    {"id": "ui.dom", "source": "ui/dom.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.model", "source": "ui/model.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.style", "source": "ui/style.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.common", "source": "ui/panels/common.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.header", "source": "ui/panels/header.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.conversation", "source": "ui/panels/conversation.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.breakpoint", "source": "ui/panels/breakpoint.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.inference", "source": "ui/panels/inference.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.status", "source": "ui/panels/status.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.game", "source": "ui/panels/game.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.diagnostics", "source": "ui/panels/diagnostics.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "ui.panels.tools", "source": "ui/panels/tools.mjs", "format": "js-module-source@1", "role": "library"}
   ]
 }

@@ -1,10 +1,15 @@
-# file: first-party/applications/aiBuddy/run.py ; version: 9
-"""Terminal launcher for AI Buddy (materialization Checkpoints A-F).
+# file: first-party/applications/aiBuddy/run.py ; version: 10
+"""Launcher for AI Buddy: terminal plus browser UI (materialization Checkpoints A-G).
 
 Starts a Tertalis RuntimeHost, creates or loads one AI Buddy Application,
-runs the host-side driver on a background thread, and reads terminal
+runs the host-side loop on a background thread, and reads terminal
 input. Plain lines are messages to AI Buddy; lines starting with "/" are
 developer commands (see /help).
+
+Unless --no-ui is given, the browser UI (frontend.kit + frontend.host) is
+activated too and its launch link is printed. The link carries a private
+access token in its #fragment; open it in any local browser, in as many
+tabs as you like. Python stays authoritative; the terminal keeps working.
 
 Inference uses llama.cpp in external mode: start llama-server yourself
 and point --llama-url at it.
@@ -20,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import webbrowser
 from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -32,6 +38,7 @@ from backend.save import ApplicationStore  # noqa: E402
 
 APP_PACK_ID = "aiBuddy"
 PLAN = ManualActivationPlan(packIds=("llmDrivers.llamaCpp", APP_PACK_ID))
+UI_PLAN = ManualActivationPlan(packIds=("llmDrivers.llamaCpp", APP_PACK_ID, "frontend.kit", "frontend.host"))
 
 HELP = """\
 Messages: type any line that does not start with "/".
@@ -76,14 +83,15 @@ Developer commands:
   /status           AI Buddy state summary
   /personality      authoritative personality
   /save             save now
+  /ui               print the browser UI link again
   /help             this help
   /quit             save and exit
 Output prefixed with "[diag]" is diagnostics, never AI Buddy speech."""
 
 
-def _loadDriver():
-    """Imports the host driver module from this application directory."""
-    spec = importlib.util.spec_from_file_location("aiBuddyHostDriver", APP_ROOT / "host" / "driver.py")
+def _loadHostModule(name: str, fileName: str):
+    """Imports one host module from this application directory."""
+    spec = importlib.util.spec_from_file_location(name, APP_ROOT / "host" / fileName)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -114,6 +122,10 @@ def _parseArgs(argv):
                         help="What new input does to a running inference (default: finish).")
     parser.add_argument("--break", dest="breakAtStart", action="store_true",
                         help="Start in breakpoint mode (pause before each inference and after each response).")
+    parser.add_argument("--no-ui", dest="ui", action="store_false", help="Terminal only; no browser UI.")
+    parser.add_argument("--ui-port", type=int, default=0, help="Browser UI port on 127.0.0.1 (default: any free port).")
+    parser.add_argument("--open", dest="openBrowser", action="store_true",
+                        help="Open the browser UI link in the default browser.")
     return parser.parse_args(argv)
 
 
@@ -140,7 +152,11 @@ def _config(args) -> dict:
         aiBuddy.update(args.settings)
     if args.memory is not None:
         aiBuddy["memory"] = args.memory
-    return {"llamaCpp": llama, "aiBuddy": aiBuddy}
+    config = {"llamaCpp": llama, "aiBuddy": aiBuddy}
+    if args.ui:
+        config["frontendHost"] = {"title": "AI Buddy", "port": args.ui_port,
+                                  "main": {"packId": APP_PACK_ID, "codeEntryId": "ui"}}
+    return config
 
 
 def _editText(text: str) -> str:
@@ -208,7 +224,8 @@ class Console:
 
 def main(argv=None) -> int:
     args = _parseArgs(argv)
-    driverModule = _loadDriver()
+    loopModule = _loadHostModule("aiBuddyHostLoop", "buddyLoop.py")
+    bridgeModule = _loadHostModule("aiBuddyFrontendBridge", "frontendBridge.py") if args.ui else None
     args.saves.mkdir(parents=True, exist_ok=True)
 
     if args.list:
@@ -218,32 +235,45 @@ def main(argv=None) -> int:
 
     host = RuntimeHost(
         applicationStore=ApplicationStore(args.saves),
-        packResolver=PackResolver(roots=(REPO_ROOT / "first-party" / "llmDrivers", APP_ROOT / "pack")),
+        packResolver=PackResolver(roots=(REPO_ROOT / "first-party" / "llmDrivers", APP_ROOT / "pack",
+                                         REPO_ROOT / "first-party" / "frontendKit", REPO_ROOT / "first-party" / "frontendHost")),
     )
     host.start()
     try:
         config = _config(args)
+        plan = UI_PLAN if args.ui else PLAN
         existing = _savedInstances(args.saves)
         if args.load or (existing and not args.new):
             applicationId = args.load or existing[0].name
             runtime = host.loadApplication(appPackId=APP_PACK_ID, applicationId=applicationId,
-                                           plan=PLAN, config=config)
+                                           plan=plan, config=config)
             print(f"Loaded AI Buddy instance {applicationId}")
         else:
-            runtime = host.createApplication(appPackId=APP_PACK_ID, plan=PLAN, config=config)
+            runtime = host.createApplication(appPackId=APP_PACK_ID, plan=plan, config=config)
             print(f"Created AI Buddy instance {runtime.applicationRun.application.applicationId}")
         print(f"Inference: llama.cpp at {args.llama_url}. Type /help for commands.")
 
         personality = runtime.invokeCapability("aiBuddy.debug.personality.describe@1")
         console = Console(personality["name"])
-        driver = driverModule.BuddyDriver(runtime, events=driverModule.DriverEvents(
+        driver = loopModule.BuddyLoop(runtime, events=loopModule.DriverEvents(
             speak=console.speak, diagnostic=console.diagnostic,
             paused=console.paused, inferenceFinished=console.finished), interruptPolicy=args.interrupt_policy)
         if args.breakAtStart:
             driver.setBreakBeforeInference(True)
 
         stop = threading.Event()
-        worker = threading.Thread(target=driver.run, args=(stop,), name="aiBuddyDriver", daemon=True)
+        uiLink = None
+        if args.ui:
+            # Before the loop thread starts: these calls use the ApplicationRun lane from this thread.
+            channel = runtime.invokeCapability("frontend.host.channel@1")
+            bridge = bridgeModule.FrontendBridge(driver, channel)
+            driver.events = bridge.wrap(driver.events)
+            uiLink = runtime.invokeCapability("frontend.host.connection@1")["url"]
+            threading.Thread(target=bridge.run, args=(stop,), name="aiBuddyFrontend", daemon=True).start()
+            print(f"Browser UI: {uiLink}\n  (private link with an access token; do not share it)")
+            if args.openBrowser:
+                webbrowser.open(uiLink)
+        worker = threading.Thread(target=driver.run, args=(stop,), name="aiBuddyLoop", daemon=True)
         worker.start()
 
         def intervene(capabilityId, payload):
@@ -317,6 +347,8 @@ def main(argv=None) -> int:
                     break
                 elif command == "help":
                     console.out(HELP)
+                elif command == "ui":
+                    console.out(f"Browser UI: {uiLink}" if uiLink else "The browser UI is off (--no-ui).")
                 elif command == "break":
                     driver.setBreakBeforeInference(argument.lower() in ("on", "1", "yes", ""))
                 elif command == "show":
@@ -498,7 +530,7 @@ def main(argv=None) -> int:
             stop.set()
             worker.join(timeout=30)
             if worker.is_alive():
-                console.diagnostic("driver did not stop within 30s; exiting without final save")
+                console.diagnostic("loop did not stop within 30s; exiting without final save")
             else:
                 bundle = runtime.saveApplication()
                 console.diagnostic(f"saved generation {bundle.generation}")

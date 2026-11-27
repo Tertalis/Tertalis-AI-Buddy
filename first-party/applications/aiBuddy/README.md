@@ -1,6 +1,6 @@
 # AI Buddy
 
-**Status: materialization Checkpoint F (last of the initial scope) — experimental. Checkpoints A to E verified by the user on Python 3.15; Checkpoint F not yet run.**
+**Status: experimental. Checkpoints A to F verified by the user on Python 3.15; Checkpoint G (browser UI) added on Tertalis 82772a2.**
 
 AI Buddy is a continuously running AI companion built as a Tertalis AppPack.
 Requirements and design: `ai-buddy-conceptual-design.txt`,
@@ -78,12 +78,23 @@ How it is implemented and why: `ai-buddy-implementation-design.txt`.
   `--settings '{"periodic": [{"name": "reflect", "everySeconds": 1800, "establishes": "memory-processing"}, {"name": "ideas", "everySeconds": 86400, "establishes": "salient-subjects"}], "passive": {"maxCandidates": 3, "candidateLifetimeSeconds": 86400}}'`.
   Nothing passive runs by default.
 
+- Browser UI (Checkpoint G): `run.bat` prints a `Browser UI:` link (add
+  `--open` to open it). Open it in any local browser, in one or more tabs:
+  conversation with an input box, live inference output with Stop, the
+  breakpoint editor (replace prompt or response, Continue), things to do,
+  situation, Minesweeper board, diagnostics, and developer tools for every
+  read and intervention the terminal offers. The link carries a private
+  access token after `#`; it changes every start. `/ui` prints it again;
+  `--no-ui` runs terminal only; `--ui-port` fixes the port.
+
 ## Layout
 
 ```
-pack/          AppPack (manifest, codeEntry.py, personality.json, rules.json)
-host/driver.py host-side driver: runs capabilities as Jobs, debugger controls
-run.py         terminal launcher
+pack/          AppPack (manifest, codeEntry.py, personality.json, rules.json,
+               ui/ browser UI CodeEntries)
+host/buddyLoop.py       host-side loop: runs capabilities as Jobs, debugger controls
+host/frontendBridge.py  loop <-> browser UI channel (tracks and Invocations)
+run.py         launcher (terminal + browser UI)
 run.bat        Windows launcher using the root python-embedded
 local/         saves (ignored by Git)
 

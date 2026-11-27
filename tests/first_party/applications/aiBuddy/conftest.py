@@ -1,4 +1,4 @@
-# file: tests/first_party/applications/aiBuddy/conftest.py ; version: 5
+# file: tests/first_party/applications/aiBuddy/conftest.py ; version: 6
 """Shared AI Buddy test harness: RuntimeHost, AI Buddy and a scripted stub provider."""
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ from backend.save import ApplicationStore
 REPO_ROOT = Path(__file__).resolve().parents[4]
 APP_ROOT = REPO_ROOT / "first-party" / "applications" / "aiBuddy"
 PLAN = ManualActivationPlan(packIds=("test.stubProvider", "aiBuddy"))
+FRONTEND_PLAN = ManualActivationPlan(packIds=("test.stubProvider", "aiBuddy", "frontend.kit", "frontend.host"))
+FRONTEND_ROOTS = (REPO_ROOT / "first-party" / "frontendKit", REPO_ROOT / "first-party" / "frontendHost")
 
 _STUB_PROVIDER = '''
 import json, time
@@ -53,9 +55,9 @@ def onLoad(ctx):
 
 
 def _loadDriverModule():
-    """Imports host/driver.py the way run.py does."""
-    path = APP_ROOT / "host" / "driver.py"
-    spec = importlib.util.spec_from_file_location("aiBuddyHostDriver", path)
+    """Imports host/buddyLoop.py the way run.py does."""
+    path = APP_ROOT / "host" / "buddyLoop.py"
+    spec = importlib.util.spec_from_file_location("aiBuddyHostLoop", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -63,6 +65,19 @@ def _loadDriverModule():
 
 
 driverModule = _loadDriverModule()
+
+
+def _loadBridgeModule():
+    """Imports host/frontendBridge.py the way run.py does."""
+    path = APP_ROOT / "host" / "frontendBridge.py"
+    spec = importlib.util.spec_from_file_location("aiBuddyFrontendBridge", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+bridgeModule = _loadBridgeModule()
 
 
 def _loadPackModule():
@@ -83,7 +98,7 @@ class Harness:
 
     def __init__(self, tmp_path: Path, responses, *, applicationId: str | None = None,
                  memory: dict | None = None, settings: dict | None = None,
-                 interruptPolicy: str = "finish") -> None:
+                 interruptPolicy: str = "finish", frontend: bool = False) -> None:
         stubRoot = tmp_path / "stub"
         packDir = stubRoot / "stubProvider"
         if not packDir.exists():
@@ -91,11 +106,11 @@ class Harness:
             (packDir / "manifest.json").write_text(json.dumps({
                 "packId": "test.stubProvider", "kind": "modPack", "version": "0.0.0",
                 "codeEntries": [{"id": "provider", "source": "codeEntry.py"}]}), encoding="utf-8")
-            (packDir / "codeEntry.py").write_text(_STUB_PROVIDER, encoding="utf-8")
+            (packDir / "codeEntry.py").write_text(_STUB_PROVIDER, encoding="utf-8", newline="\n")
         self.log = tmp_path / "provider-log.jsonl"
         self.store = ApplicationStore(tmp_path / "saves")
         self.host = RuntimeHost(applicationStore=self.store,
-                                packResolver=PackResolver(roots=(stubRoot, APP_ROOT / "pack")))
+                                packResolver=PackResolver(roots=(stubRoot, APP_ROOT / "pack", *FRONTEND_ROOTS)))
         self.host.start()
         self.closed = False
         aiBuddy = {"providerName": "stub"}
@@ -105,11 +120,14 @@ class Harness:
         self.now = datetime(2026, 11, 24, 21, 0, 0, tzinfo=timezone(timedelta(hours=1)))
         config = {"aiBuddy": aiBuddy,
                   "stubProvider": {"responses": list(responses), "log": str(self.log)}}
+        plan = FRONTEND_PLAN if frontend else PLAN
+        if frontend:
+            config["frontendHost"] = {"title": "AI Buddy", "main": {"packId": "aiBuddy", "codeEntryId": "ui"}}
         if applicationId is None:
-            self.runtime = self.host.createApplication(appPackId="aiBuddy", plan=PLAN, config=config)
+            self.runtime = self.host.createApplication(appPackId="aiBuddy", plan=plan, config=config)
         else:
             self.runtime = self.host.loadApplication(appPackId="aiBuddy", applicationId=applicationId,
-                                                     plan=PLAN, config=config)
+                                                     plan=plan, config=config)
         self.spoken: list[str] = []
         self.diagnostics: list[str] = []
         self.pauses: list[dict] = []
@@ -118,8 +136,13 @@ class Harness:
         events = driverModule.DriverEvents(
             speak=self.spoken.append, diagnostic=self.diagnostics.append,
             paused=self._paused, inferenceFinished=self.finished.append)
-        self.driver = driverModule.BuddyDriver(self.runtime, events=events, clock=self.clock,
+        self.driver = driverModule.BuddyLoop(self.runtime, events=events, clock=self.clock,
                                                interruptPolicy=interruptPolicy)
+        self.channel = self.bridge = None
+        if frontend:
+            self.channel = self.runtime.invokeCapability("frontend.host.channel@1")
+            self.bridge = bridgeModule.FrontendBridge(self.driver, self.channel)
+            self.driver.events = self.bridge.wrap(self.driver.events)
 
     def _paused(self, info: dict) -> None:
         """Records breakpoint pauses: prompt phase in pauses, response phase in outputPauses."""

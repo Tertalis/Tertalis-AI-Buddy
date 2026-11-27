@@ -1,9 +1,9 @@
-# file: first-party/applications/aiBuddy/host/driver.py ; version: 10
-"""Host-side AI Buddy driver (materialization Checkpoint A).
+# file: first-party/applications/aiBuddy/host/buddyLoop.py ; version: 11
+"""Host-side AI Buddy loop (formerly host/driver.py; renamed to avoid confusion with LLM drivers).
 
 Tertalis currently has no long-lived application scheduler: lifecycle hook
 Contexts end when the hook returns, and Jobs are run by a caller. This
-driver is the application-owned caller. It keeps no AI Buddy semantics of
+loop is the application-owned caller. It keeps no AI Buddy semantics of
 its own: every decision and state change happens inside AppPack
 capabilities executed as Jobs, so state is transactional and persisted.
 
@@ -22,7 +22,11 @@ from datetime import datetime, timezone
 
 from backend.orchestration import Job, JobState
 
-__all__ = ["BuddyDriver", "DriverEvents"]
+__all__ = ["BuddyLoop", "DriverEvents", "StaleBreakpoint"]
+
+
+class StaleBreakpoint(RuntimeError):
+    """A breakpoint action named a pause that is no longer current."""
 
 
 def _localNow() -> str:
@@ -38,6 +42,9 @@ class DriverEvents:
     diagnostic: callable = lambda text: None
     paused: callable = lambda inference: None
     inferenceFinished: callable = lambda record: None
+    received: callable = lambda text, receivedAt: None
+    breakpointCleared: callable = lambda: None
+    pauseChanged: callable = lambda inference: None
 
 
 @dataclass
@@ -46,10 +53,16 @@ class _DebugState:
     paused: bool = False
     pausedInference: dict | None = None
     continueRequested: bool = False
+    pauseSequence: int = 0
 
 
-class BuddyDriver:
-    """Runs AI Buddy capabilities as Jobs and exposes debugger controls."""
+class BuddyLoop:
+    """Runs AI Buddy capabilities as Jobs and exposes debugger controls.
+
+    Breakpoint actions may name the pause they were made against (pauseId,
+    from pausedSnapshot or the paused event). A stale one completes its
+    Future with StaleBreakpoint instead of acting on a different pause.
+    """
 
     INTERRUPT_POLICIES = ("finish", "cancel")
 
@@ -107,20 +120,30 @@ class BuddyDriver:
         self._commands.put(("break", bool(enabled)))
         self._wake.set()
 
-    def replacePrompt(self, prompt: str) -> None:
+    def replacePrompt(self, prompt: str, *, pauseId: str | None = None) -> Future:
         """Developer edit of the prompt of the inference paused at the breakpoint."""
-        self._commands.put(("replace-prompt", prompt))
-        self._wake.set()
+        return self._request("replace-prompt", prompt, pauseId)
 
-    def replaceOutput(self, rawOutput: str) -> None:
+    def replaceOutput(self, rawOutput: str, *, pauseId: str | None = None) -> Future:
         """Developer edit of the raw output of the inference paused after generation."""
-        self._commands.put(("replace-output", rawOutput))
-        self._wake.set()
+        return self._request("replace-output", rawOutput, pauseId)
 
-    def continueExecution(self) -> None:
+    def continueExecution(self, *, pauseId: str | None = None) -> Future:
         """Continues from the breakpoint or a global pause."""
-        self._commands.put(("continue",))
+        return self._request("continue", None, pauseId)
+
+    def _request(self, kind: str, value, pauseId: str | None) -> Future:
+        """Queues a breakpoint command; its Future completes when it is applied or rejected."""
+        future: Future = Future()
+        self._commands.put((kind, value, pauseId, future))
         self._wake.set()
+        return future
+
+    @property
+    def pausedSnapshot(self) -> dict | None:
+        """Copy of the current breakpoint pause (with its pauseId), or None. Safe from any thread."""
+        paused = self.debug.pausedInference
+        return None if paused is None else dict(paused)
 
     def pause(self) -> None:
         """Stops starting new work at the next boundary."""
@@ -282,9 +305,13 @@ class BuddyDriver:
             self.events.diagnostic("quiescence ended")
             self._save()
             return
+        if kind in ("replace-prompt", "replace-output", "continue"):
+            self._breakpointCommand(command)
+            return
         if kind == "input":
             job = self._job("aiBuddy.input.receive@1", {"text": command[1], "receivedAt": command[2]})
             if self._requireSucceeded(job, "receive input"):
+                self.events.received(command[1], command[2])
                 result = job.result
                 how = "amends" if result["amended"] else "establishes"
                 self.events.diagnostic(f"input recorded as {result['experienceId']}; {how} {result['workId']}")
@@ -292,39 +319,12 @@ class BuddyDriver:
                 if superseded is not None:
                     self.events.diagnostic(f"prepared inference {superseded} superseded by the new input")
                     if self.debug.pausedInference and self.debug.pausedInference["inferenceId"] == superseded:
-                        self.debug.pausedInference = None
-                        self.debug.continueRequested = False
+                        self._clearPause()
                 self._save()
         elif kind == "break":
             self.debug.breakBeforeInference = command[1]
             self.events.diagnostic(f"breakpoint mode {'on' if command[1] else 'off'} "
                                    "(pause before each inference and after each response)")
-        elif kind == "replace-output":
-            paused = self.debug.pausedInference
-            if paused is None or paused.get("phase") != "output":
-                self.events.diagnostic("no inference is paused after generation; output not replaced")
-                return
-            job = self._job("aiBuddy.debug.output.replace@1", {
-                "inferenceId": paused["inferenceId"], "rawOutput": command[1], "now": self.clock()})
-            if self._requireSucceeded(job, "replace output"):
-                paused["rawOutput"] = command[1]
-                self.events.diagnostic(f"output of {paused['inferenceId']} replaced by developer")
-        elif kind == "replace-prompt":
-            paused = self.debug.pausedInference
-            if paused is not None and paused.get("phase") == "output":
-                self.events.diagnostic("the paused inference has already run; its prompt cannot be replaced")
-                return
-            if paused is None:
-                self.events.diagnostic("no paused inference; prompt not replaced")
-                return
-            job = self._job("aiBuddy.debug.prompt.replace@1", {
-                "inferenceId": paused["inferenceId"], "prompt": command[1], "now": self.clock()})
-            if self._requireSucceeded(job, "replace prompt"):
-                paused["prompt"] = command[1]
-                self.events.diagnostic(f"prompt of {paused['inferenceId']} replaced by developer")
-        elif kind == "continue":
-            self.debug.paused = False
-            self.debug.continueRequested = True
         elif kind == "pause":
             self.debug.paused = True
             self.events.diagnostic("paused")
@@ -347,6 +347,75 @@ class BuddyDriver:
             except Exception as error:  # noqa: BLE001 - reported to the requester.
                 future.set_exception(error)
 
+    def _breakpointCommand(self, command) -> None:
+        """Applies replace-prompt / replace-output / continue, honouring an expected pauseId."""
+        kind, value, pauseId, future = command
+        try:
+            future.set_result(self._applyBreakpointCommand(kind, value, pauseId))
+        except Exception as error:  # noqa: BLE001 - reported to the requester.
+            future.set_exception(error)
+
+    def _applyBreakpointCommand(self, kind: str, value, pauseId: str | None):
+        paused = self.debug.pausedInference
+        if pauseId is not None and (paused is None or paused.get("pauseId") != pauseId):
+            raise StaleBreakpoint("That breakpoint is no longer current.")
+        if paused is not None and not self._pauseStillValid(paused):
+            self.events.diagnostic(f"breakpoint on {paused['inferenceId']} is stale (the inference is no longer "
+                                   f"{'prepared' if paused.get('phase') != 'output' else 'generated'}); cleared")
+            self._clearPause()
+            if kind != "continue":
+                raise StaleBreakpoint("The paused inference changed; the breakpoint was cleared.")
+            self.debug.paused = False
+            return {"continued": True, "stale": True}
+        if kind == "continue":
+            self.debug.paused = False
+            self.debug.continueRequested = True
+            return {"continued": True}
+        if kind == "replace-output":
+            if paused is None or paused.get("phase") != "output":
+                self.events.diagnostic("no inference is paused after generation; output not replaced")
+                raise StaleBreakpoint("No inference is paused after generation.")
+            job = self._job("aiBuddy.debug.output.replace@1", {
+                "inferenceId": paused["inferenceId"], "rawOutput": value, "now": self.clock()})
+            if not self._requireSucceeded(job, "replace output"):
+                raise RuntimeError("The output could not be replaced.")
+            paused["rawOutput"] = value
+            self.events.diagnostic(f"output of {paused['inferenceId']} replaced by developer")
+            self.events.pauseChanged(dict(paused))
+            return {"replaced": "output"}
+        if paused is not None and paused.get("phase") == "output":
+            self.events.diagnostic("the paused inference has already run; its prompt cannot be replaced")
+            raise StaleBreakpoint("The paused inference has already run.")
+        if paused is None:
+            self.events.diagnostic("no paused inference; prompt not replaced")
+            raise StaleBreakpoint("No inference is paused.")
+        job = self._job("aiBuddy.debug.prompt.replace@1", {
+            "inferenceId": paused["inferenceId"], "prompt": value, "now": self.clock()})
+        if not self._requireSucceeded(job, "replace prompt"):
+            raise RuntimeError("The prompt could not be replaced.")
+        paused["prompt"] = value
+        self.events.diagnostic(f"prompt of {paused['inferenceId']} replaced by developer")
+        self.events.pauseChanged(dict(paused))
+        return {"replaced": "prompt"}
+
+    def _pauseStillValid(self, paused: dict) -> bool:
+        """A prompt pause needs a prepared inference; an output pause a generated one.
+
+        Developer changes (abandon, suspend, amend) or new input can supersede
+        the paused inference; continuing it would fail and stop the loop.
+        """
+        record = self._read("aiBuddy.debug.record.describe@1", {"id": paused["inferenceId"]})
+        expected = "generated" if paused.get("phase") == "output" else "prepared"
+        return isinstance(record, dict) and record.get("state") == expected
+
+    def _clearPause(self) -> None:
+        """Forgets the breakpoint pause and tells listeners."""
+        had = self.debug.pausedInference is not None
+        self.debug.pausedInference = None
+        self.debug.continueRequested = False
+        if had:
+            self.events.breakpointCleared()
+
     def _deliverOutbox(self) -> None:
         """Delivers committed deliberate communication, then acknowledges it."""
         pending = self._read("aiBuddy.outbox.pending@1")
@@ -359,6 +428,8 @@ class BuddyDriver:
 
     def _pauseAt(self, info: dict) -> None:
         """Pauses at a breakpoint phase and reports it."""
+        self.debug.pauseSequence += 1
+        info = {**info, "pauseId": f"p{self.debug.pauseSequence}"}
         self.debug.pausedInference = info
         self.debug.continueRequested = False
         where = "before inference" if info["phase"] == "prompt" else "after generation of"
@@ -367,6 +438,7 @@ class BuddyDriver:
 
     def _execute(self, inference: dict) -> None:
         """Executes one prepared inference; its output is then processed or paused."""
+        inference = {key: value for key, value in inference.items() if key != "pauseId"}
         partial: list[str] = []
         job = self._job("aiBuddy.cycle.execute@1", {
             "inferenceId": inference["inferenceId"], "now": self.clock(), "partialOutput": partial},
@@ -379,25 +451,21 @@ class BuddyDriver:
                 "inferenceId": inference["inferenceId"], "partialOutput": self.lastPartialOutput,
                 "reason": "a new message arrived", "now": self.clock()})
             if self._requireSucceeded(record, "record interrupted inference"):
-                self.debug.pausedInference = None
-                self.debug.continueRequested = False
+                self._clearPause()
                 self.events.diagnostic(
                     f"inference {inference['inferenceId']} cancelled for new input; "
                     f"{len(self.lastPartialOutput)} characters of partial output kept as an interrupted step")
                 self._save()
             return
         if job.state is JobState.CANCELLED:
-            self.debug.pausedInference = {**inference, "phase": "prompt"}
-            self.debug.continueRequested = False
             self.events.diagnostic(
                 f"inference {inference['inferenceId']} interrupted; it remains prepared "
                 f"({len(self.lastPartialOutput)} characters of partial output not retained in state)")
-            self.events.paused(self.debug.pausedInference)
+            self._pauseAt({key: value for key, value in inference.items() if key != "pauseId"} | {"phase": "prompt"})
             return
         if not self._requireSucceeded(job, "execute inference"):
             return
-        self.debug.pausedInference = None
-        self.debug.continueRequested = False
+        self._clearPause()
         result = job.result
         identifier = inference["inferenceId"]
         if result["state"] == "failed":
@@ -420,8 +488,7 @@ class BuddyDriver:
         job = self._job("aiBuddy.cycle.process@1", {"inferenceId": identifier, "now": self.clock()})
         if not self._requireSucceeded(job, "process inference output"):
             return
-        self.debug.pausedInference = None
-        self.debug.continueRequested = False
+        self._clearPause()
         record = self._read("aiBuddy.debug.record.describe@1", {"id": identifier})
         self.events.inferenceFinished(record)
         result = job.result
@@ -470,6 +537,10 @@ class BuddyDriver:
         if paused is not None:
             if not self.debug.continueRequested:
                 return handled
+            if not self._pauseStillValid(paused):
+                self.events.diagnostic(f"breakpoint on {paused['inferenceId']} is stale; cleared, continuing")
+                self._clearPause()
+                return True
             if paused.get("phase") == "output":
                 self._process(paused)
             else:

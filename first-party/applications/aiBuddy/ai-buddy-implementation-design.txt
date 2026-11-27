@@ -1,20 +1,23 @@
 AI BUDDY - IMPLEMENTATION DESIGN
-Version 1.0 | 2026-11-25
+Version 1.1 | 2026-11-27
 
 Companion to the AI Buddy conceptual design, initial materialization
 requirements and handoff. This document records how the initial
-materialization scope (requirements Stages 1-6, checkpoints A-F) is
-implemented on Tertalis and why. It records design, not status: platform
+materialization scope (requirements Stages 1-6, checkpoints A-F) and the
+browser UI (checkpoint G) are implemented on Tertalis and why. It records design, not status: platform
 gaps, workflow state and defects are tracked in the coordination records.
 
 01. STRUCTURE
 
-01.01. AppPack (first-party/applications/aiBuddy/pack): one CodeEntry
-       (codeEntry.py) holding all AI Buddy semantics, the authoritative
-       initial personality (personality.json) and initial rules
-       (rules.json). One module, because PackLoader loads one source per
-       CodeEntry.
-01.02. Host driver (host/driver.py): sequences capabilities as Tertalis
+01.01. AppPack (first-party/applications/aiBuddy/pack): one Python
+       CodeEntry (codeEntry.py) holding all AI Buddy semantics, the
+       authoritative initial personality (personality.json) and initial
+       rules (rules.json). One Python module, because there is no Python
+       library CodeEntry loader yet. The browser UI is a js-module-source@1
+       main CodeEntry (ui/main.mjs) with library entries for its modules
+       (17).
+01.02. Host loop (host/buddyLoop.py, formerly host/driver.py, renamed to
+       avoid confusion with LLM drivers): sequences capabilities as Tertalis
        Jobs, holds debugger state and delivers committed speech. It carries
        no AI Buddy semantics. It exists in host code because Tertalis has no
        long-lived application scheduler: lifecycle hook Contexts end when
@@ -22,8 +25,9 @@ gaps, workflow state and defects are tracked in the coordination records.
        other threads only enqueue commands or request cancellation of the
        running Job.
 01.03. Launcher (run.py, run.bat): RuntimeHost with the llama.cpp driver
-       Pack in external mode and the AI Buddy AppPack; terminal input,
-       developer commands, saves under local/.
+       Pack in external mode, the AI Buddy AppPack and, unless --no-ui, the
+       frontend.kit and frontend.host Packs; terminal input, developer
+       commands, browser UI link, saves under local/.
 01.04. Tests (tests/first_party/applications/aiBuddy): runtime contracts
        with a scripted stub provider Pack; conftest.py holds the harness
        (controllable clock, breakpoint and response-pause capture) and
@@ -65,7 +69,7 @@ gaps, workflow state and defects are tracked in the coordination records.
        model again.
 03.04. Provider failures are recorded as a failed inference and failed
        thing to do; the loop continues. A Job that does not succeed pauses
-       the driver so it cannot hot-loop. Every capability is registered
+       the loop so it cannot hot-loop. Every capability is registered
        through a guard that aborts transactions it opened if it raises, so
        a rejected request fails its own Job cleanly.
 03.05. Cancellation applies only to execution. A developer interrupt leaves
@@ -190,7 +194,7 @@ gaps, workflow state and defects are tracked in the coordination records.
        undertaking is escalated to Important (a periodic requirement making
        the game more important over time); passive activities are never
        escalated.
-08.08. Input during a running inference follows the driver's policy:
+08.08. Input during a running inference follows the loop's policy:
        "finish" (default) lets it complete; "cancel" stops it and keeps its
        partial output as an incomplete step that is shown but never acted
        on, then rebuilds the prompt.
@@ -230,7 +234,7 @@ gaps, workflow state and defects are tracked in the coordination records.
        records when the scheduler last ran; the next active prompt states
        them. Passive prompts never consume notices. Activation does not
        recount passive work.
-10.04. Quiescence is driver-controlled until the platform offers it: it
+10.04. Quiescence is loop-controlled until the platform offers it: it
        first deactivates AI Buddy (active and quiescent is invalid), then
        runs no Jobs; commands that would run Jobs are deferred in order;
        ending quiescence reactivates AI Buddy only if quiescence
@@ -289,7 +293,7 @@ gaps, workflow state and defects are tracked in the coordination records.
        output replacement, work changes, rule revisions, injected memories,
        lifecycle changes) and are distinguishable from AI Buddy's own
        actions in records and prompts.
-13.03. The driver stamps developer requests with its clock: orchestration
+13.03. The loop stamps developer requests with its clock: orchestration
        supplies time.
 13.04. Capabilities: aiBuddy.input.receive@1; aiBuddy.cycle.prepare@1,
        execute@1, process@1, recordInterrupted@1; aiBuddy.outbox.pending@1,
@@ -313,7 +317,10 @@ gaps, workflow state and defects are tracked in the coordination records.
        stepsInPrompt 3, investigateLosses on. minesweeper: 9x9, 10 mines.
 14.06. passive: batchSize 20, maxCandidates 3, candidateLifetimeSeconds
        86400.
-14.07. Driver: interrupt policy finish | cancel; breakpoint mode.
+14.07. Loop: interrupt policy finish | cancel; breakpoint mode.
+14.08. frontendHost (launcher): title, port (--ui-port), main
+       {packId aiBuddy, codeEntryId ui}; --no-ui leaves both frontend Packs
+       out of the activation plan.
 
 15. REFINEMENTS OF THE CONCEPTUAL DESIGN
 
@@ -332,15 +339,48 @@ choice open. Each is changeable.
 15.07. Activity steps do not consume the continuation limit; idle and step
        limits bound them instead.
 
-16. OPEN QUESTIONS
+17. BROWSER UI (CHECKPOINT G)
 
-16.01. Rule precedence beyond simple order; whether rules should also be
+Platform design: Tertalis design/working/browser-frontend-checkpoint-01.txt.
+17.01. Python stays authoritative. The browser renders tracks and sends
+       Invocations; it holds no AI Buddy state. The terminal keeps working,
+       and opening or closing tabs never changes AI Buddy behaviour.
+17.02. host/frontendBridge.py is the only module that knows the channel.
+       It wraps the loop's events (speech, received input, diagnostics,
+       pauses, finished inferences) into tracks and maps Invocations to the
+       loop's thread-safe requests, resolving each when the loop applies it.
+       It runs on its own thread and never calls the runtime; reads and
+       interventions complete at the loop's next safe boundary.
+17.03. Tracks: aibuddy.loop (flags, published at once), aibuddy.status and
+       aibuddy.game (refreshed through the loop when something changed),
+       aibuddy.breakpoint, aibuddy.inference (live partial output, last
+       record), aibuddy.conversation and aibuddy.diagnostics (logs).
+17.04. Invocations: aiBuddy.say, breakpoints, continue, replacePrompt,
+       replaceOutput, pause, interrupt (Stop), quiesce, unquiesce, save;
+       aiBuddy.read and aiBuddy.intervene limited to explicit allow-lists
+       of aiBuddy.debug./game capabilities (never cycle, input or outbox
+       capabilities).
+17.05. Every breakpoint pause has a pauseId. Browser breakpoint actions
+       name the pause they were made against; a stale one is refused as
+       conflict and changes nothing, so several tabs cannot act on a pause
+       they have not seen.
+17.06. A pause whose inference is no longer prepared (prompt phase) or
+       generated (output phase), e.g. after a developer abandoned the
+       undertaking, is cleared with a diagnostic instead of executing and
+       stopping the loop. This applies to the terminal too.
+17.07. The UI is plain ES modules with DOM text only (no HTML strings),
+       styles as a constructed stylesheet, and every module declared in the
+       manifest because the frontend host serves only declared sources.
+
+18. OPEN QUESTIONS
+
+18.01. Rule precedence beyond simple order; whether rules should also be
        retrievable as memories; scopes beyond the fixed set; how many rules
        a prompt can hold before rules need selection.
-16.02. Retrieval quality beyond lexical matching; consolidation or
+18.02. Retrieval quality beyond lexical matching; consolidation or
        revisiting of reflections beyond one pass; boundary and cleanup of
        working information after completion.
-16.03. Delay or expiry for scheduled reactions; AI Buddy suspending,
+18.03. Delay or expiry for scheduled reactions; AI Buddy suspending,
        abandoning or amending its own work; inference-initiated Choice.
-16.04. A richer output contract than tags, and whether models follow the
+18.04. A richer output contract than tags, and whether models follow the
        current one reliably (a Stage 7 question).
