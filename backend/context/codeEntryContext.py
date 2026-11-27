@@ -1,4 +1,4 @@
-# file: backend/context/codeEntryContext.py ; version: 30
+# file: backend/context/codeEntryContext.py ; version: 31
 from __future__ import annotations
 
 from contextlib import suppress
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         StreamingLlmResult,
     )
     from backend.orchestration.cancellation import CancellationSignal
+    from backend.packs.runtime import DeclaredSourceEntry
     from backend.registration import RegistrationScope
     from backend.values.committed import CommittedValueLayer, CommittedValueTransaction
 
@@ -402,6 +403,22 @@ class _LlmFacade:
                 observation.finishExecution()
 
 
+class _PacksFacade:
+    """Read-only view of recorded non-executed CodeEntries of active Packs."""
+
+    def __init__(self, *, declaredEntries: Callable[[str], tuple[DeclaredSourceEntry, ...]] | None, requireValid: Callable[[], None]) -> None:
+        """Binds an optional loader query and the owning context's validity check."""
+        self._declaredEntries = declaredEntries
+        self._requireValid = requireValid
+
+    def declaredEntries(self, entryFormat: str) -> tuple[DeclaredSourceEntry, ...]:
+        """Returns the immutable declared entries of one format, in activation order."""
+        self._requireValid()
+        if self._declaredEntries is None:
+            return ()
+        return self._declaredEntries(entryFormat)
+
+
 @dataclass(frozen=True, slots=True)
 class CodeEntryIdentity:
     """Runtime and implementation identity of one loaded CodeEntry instance."""
@@ -424,7 +441,7 @@ class CodeEntryIdentity:
 class CodeEntryContext:
     """Fresh invocation-scoped gateway supplied to Pack CodeEntry code."""
 
-    def __init__(self, *, identity: CodeEntryIdentity, packRoot: Path, io: ManagedIo | ManagedIoTransaction, capabilities: CapabilityRegistry, llmProviders: LlmProviderRegistry, llmPipeline: LlmProcessingPipeline, memory: CommittedValueLayer | CommittedValueTransaction, registrationScope: RegistrationScope, config: dict[str, object], capabilityInvoker: Callable[[str, object | None], object], process: ProcessFacade | None = None, workspace: EphemeralWorkspace | None = None, allowRegistration: bool = False, cancellationSignal: CancellationSignal | None = None, observationOwner: ObservationOwner | None = None, executionAccess=None) -> None:
+    def __init__(self, *, identity: CodeEntryIdentity, packRoot: Path, io: ManagedIo | ManagedIoTransaction, capabilities: CapabilityRegistry, llmProviders: LlmProviderRegistry, llmPipeline: LlmProcessingPipeline, memory: CommittedValueLayer | CommittedValueTransaction, registrationScope: RegistrationScope, config: dict[str, object], capabilityInvoker: Callable[[str, object | None], object], process: ProcessFacade | None = None, workspace: EphemeralWorkspace | None = None, allowRegistration: bool = False, cancellationSignal: CancellationSignal | None = None, observationOwner: ObservationOwner | None = None, executionAccess=None, declaredEntries: Callable[[str], tuple[DeclaredSourceEntry, ...]] | None = None) -> None:
         """Creates one call-specific authority context from runtime-owned facilities.
 
         Production ApplicationRuntime construction supplies process authority and
@@ -447,6 +464,7 @@ class CodeEntryContext:
         self.cancellation = _CancellationFacade(signal=cancellationSignal, requireValid=self.requireValid)
         self.capabilities = _CapabilityFacade(ownerId=identity.codeEntryInstanceId, registry=capabilities, scope=registrationScope, invoker=capabilityInvoker, requireValid=self.requireValid, allowRegistration=allowRegistration)
         self.observations = ObservationFacade(observationOwner, self.requireValid)
+        self.packs = _PacksFacade(declaredEntries=declaredEntries, requireValid=self.requireValid)
         self.llm = _LlmFacade(ownerId=identity.codeEntryInstanceId, registry=llmProviders, scope=registrationScope, pipeline=llmPipeline, memory=memory, requireValid=self.requireExecution, allowRegistration=allowRegistration, cancellationSignal=cancellationSignal, observationOwner=observationOwner, executionAccess=executionAccess)
 
     def requireExecution(self):

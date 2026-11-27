@@ -1,0 +1,15 @@
+{
+  "packId": "frontend.kit",
+  "kind": "modPack",
+  "version": "0.1.0",
+  "codeEntries": [
+    {"id": "http", "source": "http.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "credential", "source": "credential.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "eventStream", "source": "eventStream.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "stream", "source": "stream.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "tracks", "source": "tracks.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "invoke", "source": "invoke.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "session", "source": "session.mjs", "format": "js-module-source@1", "role": "library"},
+    {"id": "bootstrap", "source": "bootstrap.mjs", "format": "js-module-source@1", "role": "library"}
+  ]
+}

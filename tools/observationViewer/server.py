@@ -1,4 +1,4 @@
-# file: tools/observationViewer/server.py ; version: 2
+# file: tools/observationViewer/server.py ; version: 3
 """Fixed-asset local viewer launcher; imports no Tertalis runtime and proxies no observations."""
 from __future__ import annotations
 
@@ -8,9 +8,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
-ASSETS = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
-          "/style.css": ("style.css", "text/css; charset=utf-8"),
-          **{"/" + name: (name, "text/javascript; charset=utf-8") for name in ("app.mjs", "model.mjs", "polling.mjs")}}
+KIT_ROOT = ROOT.parent.parent / "first-party" / "frontendKit"
+ASSETS = {"/": (ROOT / "index.html", "text/html; charset=utf-8"), "/index.html": (ROOT / "index.html", "text/html; charset=utf-8"),
+          "/style.css": (ROOT / "style.css", "text/css; charset=utf-8"),
+          **{"/" + name: (ROOT / name, "text/javascript; charset=utf-8") for name in ("app.mjs", "model.mjs", "polling.mjs")},
+          # Shared kit module imported by polling.mjs through a root-clamped relative URL.
+          "/first-party/frontendKit/http.mjs": (KIT_ROOT / "http.mjs", "text/javascript; charset=utf-8")}
 
 
 class ViewerServer(HTTPServer):
@@ -62,8 +65,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ASSETS:
             self.reply(404, b"Unknown viewer asset.", "text/plain")
             return
-        name, contentType = ASSETS[self.path]
-        self.reply(200, (ROOT / name).read_bytes(), contentType)
+        path, contentType = ASSETS[self.path]
+        self.reply(200, path.read_bytes(), contentType)
 
 
 def main() -> None:

@@ -1,0 +1,5 @@
+/* file: first-party/frontendHost/boot.css ; version: 1 */
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; }
+#boot-status:empty { display: none; }
+#boot-status { margin: 2rem; opacity: 0.8; }

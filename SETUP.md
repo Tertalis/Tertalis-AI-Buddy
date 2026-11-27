@@ -55,10 +55,11 @@ no Application source to provision tools.
 
 ## AI Buddy development status
 
-This repository does **not** yet contain an AI Buddy AppPack, separate
-application setup scripts or a runnable AI Buddy launcher. Root setup
-provisions Tertalis platform internals only. Completing it does not
-install, configure or launch an AI assistant.
+The AI Buddy AppPack and terminal launcher are implemented under
+`first-party/applications/aiBuddy/`. Root setup provisions Tertalis platform
+internals only. Start an external llama-server and use that application's
+`run.bat`; consult its README for options. AI Buddy requires Python 3.15;
+the platform-only fallback above is not an AI Buddy compatibility claim.
 
 For platform development, after root setup run:
 
@@ -67,9 +68,7 @@ For platform development, after root setup run:
 .\python-embedded\python.exe -X frozen_modules=off .\scripts\verify_tools.py
 ```
 
-These are commands, not claims that the newly migrated repository's tests
-were run. See [README.md](README.md) for the workstream's present status
-and [AGENTS.md](AGENTS.md) for the canonical development coordination
-protocol. The copied `ai-workflow/` files are historical snapshots;
-the authoritative coordination ref remains
-`Tertalis/Tertalis` branch `integration`.
+The latest platform adoption and actual verification are recorded in
+[README.md](README.md). See [AGENTS.md](AGENTS.md) for development coordination.
+Only the application routing stub is kept under `ai-workflow/`; operational
+coordination remains in `Tertalis/Tertalis` branch `integration`.

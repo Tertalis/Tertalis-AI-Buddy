@@ -1,50 +1,30 @@
-// file: tools/observationViewer/polling.mjs ; version: 1
+// file: tools/observationViewer/polling.mjs ; version: 2
 /** Read-only transport and generation-safe polling, independent of graphs and DOM. */
 import {parseSnapshot, SchemaError} from './model.mjs';
-export const MAX_BODY = 2 * 1024 * 1024;
+// Shared helpers live in the frontend kit Pack. This relative path resolves on disk (Node) and,
+// in the browser, clamps at the URL root to the fixed asset /first-party/frontendKit/http.mjs.
+import {MAX_BODY, ConnectionError, isCredential, readBoundedJson, requestOptions, requireLoopbackOrigin} from '../../first-party/frontendKit/http.mjs';
+export {MAX_BODY, ConnectionError};
 
-/** Fixed public connection failure with no URL, credential or server body attached. */
-export class ConnectionError extends Error {
-  constructor(code) { super(code); this.code = code; }
-}
 /** Accept only an explicit G-01 literal-loopback endpoint and selected opaque publication. */
 export function connectionConfig(endpoint, publication, credential) {
   try {
-    const url = new URL(endpoint);
-    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash || url.username || url.password) throw new Error();
+    const url = requireLoopbackOrigin(endpoint);
     let selected = publication;
     if (publication.startsWith('http')) {
       const target = new URL(publication);
       if (target.origin !== url.origin || target.search || target.hash || target.username || target.password) throw new Error();
       selected = target.pathname.replace(/^\/publications\//, '');
     }
-    if (!/^[0-9a-f]{32}$/.test(selected) || !/^[A-Za-z0-9_-]{16,256}$/.test(credential)) throw new Error();
+    if (!/^[0-9a-f]{32}$/.test(selected) || !isCredential(credential)) throw new Error();
     return Object.freeze({url: url.origin + '/publications/' + selected, publicationId: selected, credential});
   } catch { throw new ConnectionError('invalid-connection'); }
 }
 /** Read a response incrementally up to the accepted bridge limit; no unbounded text(). */
-async function boundedJson(response) {
-  if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) { await response.body?.cancel(); throw new SchemaError(); }
-  const length = response.headers.get('content-length');
-  if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_BODY)) { await response.body?.cancel(); throw new SchemaError(); }
-  if (!response.body) throw new SchemaError();
-  const reader = response.body.getReader(); const chunks = []; let size = 0;
-  try {
-    while (true) {
-      const {done, value} = await reader.read(); if (done) break;
-      size += value.byteLength;
-      if (size > MAX_BODY) { await reader.cancel(); throw new SchemaError(); }
-      chunks.push(value);
-    }
-    const bytes = new Uint8Array(size); let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    try { return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes)); } catch { throw new SchemaError(); }
-  } finally { reader.releaseLock(); }
-}
+const boundedJson = response => readBoundedJson(response, {limit: MAX_BODY, invalid: () => new SchemaError()});
 /** Fetch one authorized snapshot only; no discovery, source mutation or raw error propagation. */
 export async function readPublication(config, signal, fetcher = globalThis.fetch) {
-  const response = await fetcher(config.url, {method: 'GET', headers: {Authorization: 'Bearer ' + config.credential},
-    signal, credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer'});
+  const response = await fetcher(config.url, requestOptions(config.credential, {method: 'GET', signal}));
   if (!response.ok) {
     await response.body?.cancel();
     throw new ConnectionError(({401: 'unauthorized', 403: 'forbidden', 404: 'withdrawn', 410: 'revoked', 503: 'unavailable'})[response.status] ?? 'disconnected');

@@ -4,7 +4,9 @@ A standalone, read-only browser client for the accepted
 `tertalis.observation-publication@1` contract. It imports no Tertalis runtime, activates
 no Packs and creates no observation sessions. There is no build step, CDN, package
 installation, discovery or permanent frontend. Use a modern browser with ES modules,
-BigInt, Fetch streams and SVG. Python serves only six fixed public assets.
+BigInt, Fetch streams and SVG. Python serves only seven fixed public assets: the
+viewer's own six plus the shared `first-party/frontendKit/http.mjs`, which
+`polling.mjs` imports (bounded JSON, loopback validation, request options).
 
 ## Launch and connect
 

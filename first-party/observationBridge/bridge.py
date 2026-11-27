@@ -1,19 +1,24 @@
-# file: first-party/observationBridge/bridge.py ; version: 3
+# file: first-party/observationBridge/bridge.py ; version: 4
 """Bounded selected-publication registry with a replaceable loopback HTTP adapter."""
 from __future__ import annotations
 
 import hashlib
 import re
-import secrets
-import socket
 from collections.abc import Callable
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Event, RLock, Thread
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from backend.observation import ObservationGrantRevoked, ObservationReadGrant
+from backend.transport.loopbackHttp import (
+    LoopbackHttpServer,
+    QuietHandler,
+    bearerMatches,
+    exactHost,
+    newCredential,
+    singleOrigin,
+    validateLocalOrigins,
+)
 
 from .schema import MAX_SAMPLES, MAX_WINDOWS, SCHEMA_ID, serialize
 
@@ -22,19 +27,7 @@ MAX_PUBLICATIONS = 8
 
 def validateOrigins(origins: object) -> tuple[str, ...]:
     """Accepts only explicitly named local HTTP viewer origins with concrete ports."""
-    if type(origins) not in (list, tuple) or len(origins) > 8:
-        raise ValueError("allowedOrigins must be a bounded list.")
-    result = []
-    for origin in origins:
-        if type(origin) is not str:
-            raise ValueError("Invalid viewer origin.")
-        parsed = urlsplit(origin)
-        if (parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1")
-                or parsed.username is not None or parsed.password is not None or parsed.path or parsed.query or parsed.fragment
-                or parsed.port is None or not 1 <= parsed.port <= 65535 or parsed.netloc != origin[len("http://"):]):
-            raise ValueError("Viewer origin must be an exact local HTTP origin with a port.")
-        result.append(origin)
-    return tuple(dict.fromkeys(result))
+    return validateLocalOrigins(origins)
 
 
 @dataclass(slots=True)
@@ -68,7 +61,7 @@ class ObservationBridge:
         self._stopping = Event()
         self._closed = False
         self._publications: dict[str, _Publication] = {}
-        self._credential = secrets.token_urlsafe(32)
+        self._credential = newCredential()
         self._server = None
         self._thread = None
         try:
@@ -181,57 +174,20 @@ class ObservationBridge:
                     self._closed = True
 
 
-class _Server(HTTPServer):
+class _Server(LoopbackHttpServer):
     """Single request worker, finite connection timeout/backlog; no reader thread fanout."""
-
-    request_queue_size = 8
-    allow_reuse_address = False
 
     def __init__(self, address, bridge: ObservationBridge) -> None:
         """Binds loopback; the server retains Pack state only, never invocation context."""
         self.bridge = bridge
-        self._clientsLock = RLock()
-        self._clients: set[socket.socket] = set()
-        super().__init__(address, _Handler)
-
-    def get_request(self):
-        """Applies a bounded socket I/O timeout before processing any HTTP headers."""
-        connection, address = super().get_request()
-        connection.settimeout(1.0)
-        with self._clientsLock:
-            if self.bridge._stopping.is_set():
-                connection.close()
-                raise OSError("Observation bridge is stopping.")
-            self._clients.add(connection)
-        return connection, address
-
-    def interruptClients(self) -> None:
-        """Unblocks partial headers and pending writes before shutdown waits for the worker."""
-        with self._clientsLock:
-            for connection in self._clients:
-                try:
-                    connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-
-    def close_request(self, request) -> None:
-        """Drops the accepted socket from the finite active-connection set on every exit."""
-        with self._clientsLock:
-            self._clients.discard(request)
-        super().close_request(request)
-
-    def handle_error(self, request, client_address) -> None:
-        """Isolates broken local connections without logging requests, credentials or internals."""
+        host, port = address
+        super().__init__(port, _Handler, isStopping=bridge._stopping.is_set, host=host)
 
 
-class _Handler(BaseHTTPRequestHandler):
+class _Handler(QuietHandler):
     """Strict read-only HTTP adapter with exact Host, Origin and Bearer checks."""
 
     server_version = "TertalisObservationBridge"
-    sys_version = ""
-
-    def log_message(self, format, *args) -> None:
-        """Suppresses access/error logging so headers, paths and credentials are never emitted."""
 
     def send_error(self, code, message=None, explain=None) -> None:
         """Keeps parser/unsupported-method errors fixed, non-reflective JSON with no-store headers."""
@@ -239,13 +195,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _origin(self) -> str | None:
         """Returns a validated explicit Origin, with absence allowed for authenticated local tools."""
-        origins = self.headers.get_all("Origin", [])
-        if not origins:
-            return None
-        if len(origins) != 1 or origins[0] not in self.server.bridge._origins:
-            raise PermissionError("Origin rejected.")
-        return origins[0]
-
+        return singleOrigin(self.headers, self.server.bridge._origins)
     def _reply(self, status: int, body: bytes, origin: str | None = None, *, preflight: bool = False) -> None:
         """Writes only fixed protocol headers and a bounded allowlisted body; never reflects requests."""
         self.close_connection = True
@@ -268,7 +218,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _validate(self, *, preflight: bool = False) -> tuple[str, str | None] | None:
         """Rejects ambiguous headers, URL credentials, ambient discovery and unauthorized reads."""
         bridge = self.server.bridge
-        if self.headers.get_all("Host", []) != [bridge._authority]:
+        if not exactHost(self.headers, bridge._authority):
             self._reply(403, b'{"error":"host-rejected"}')
             return None
         try:
@@ -287,12 +237,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply(403, b'{"error":"preflight-rejected"}')
                 return None
         else:
-            credentials = self.headers.get_all("Authorization", [])
-            try:
-                authorized = len(credentials) == 1 and secrets.compare_digest(credentials[0].encode("ascii"), ("Bearer " + bridge._credential).encode("ascii"))
-            except UnicodeError:
-                authorized = False
-            if not authorized:
+            if not bearerMatches(self.headers, bridge._credential):
                 self._reply(401, b'{"error":"read-credential-required"}', origin)
                 return None
         return match[1], origin

@@ -1,4 +1,4 @@
-# file: tests/tools/observationViewer/test_viewer.py ; version: 2
+# file: tests/tools/observationViewer/test_viewer.py ; version: 3
 """Tertalis-suite entry point for deterministic JS tests and fixed local asset-server checks."""
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def request(server, path: str, *, host: str | None = None):
     return result
 
 
-@pytest.mark.parametrize("path", ["/", "/app.mjs", "/model.mjs", "/polling.mjs", "/style.css"])
+@pytest.mark.parametrize("path", ["/", "/app.mjs", "/model.mjs", "/polling.mjs", "/style.css", "/first-party/frontendKit/http.mjs"])
 def test_fixed_assets_no_store_and_local_browser_policy(server, path):
     """The launcher serves only public viewer assets under a restrictive local policy."""
     status, headers, body = request(server, path)
@@ -61,7 +61,7 @@ def test_fixed_assets_no_store_and_local_browser_policy(server, path):
     assert "Access-Control-Allow-Origin" not in headers
 
 
-@pytest.mark.parametrize("path", ["/../backend/observation.py", "/README.md", "/?credential=private-sentinel", "/publications", "/favicon.ico"])
+@pytest.mark.parametrize("path", ["/../backend/observation.py", "/README.md", "/first-party/frontendKit/stream.mjs", "/first-party/frontendKit/manifest.json", "/?credential=private-sentinel", "/publications", "/favicon.ico"])
 def test_no_directory_proxy_or_reflected_queries(server, path, capsys):
     """Unknown paths cannot turn the static viewer into a proxy, file server or credential log."""
     status, _headers, body = request(server, path)

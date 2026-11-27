@@ -1,4 +1,4 @@
-# file: backend/packs/runtime.py ; version: 17
+# file: backend/packs/runtime.py ; version: 18
 from __future__ import annotations
 
 import hashlib
@@ -20,9 +20,29 @@ from backend.values.committed import CommittedValueLayer, CommittedValueTransact
 if TYPE_CHECKING:
     from backend.application.applicationRuntime import ApplicationRuntime
 
-__all__ = ["ManualActivationPlan", "PackDefinition", "PackLoader", "PackResolver"]
+__all__ = [
+    "CODE_ENTRY_FORMATS",
+    "CODE_ENTRY_ROLES",
+    "DeclaredSourceEntry",
+    "JS_MODULE_FORMAT",
+    "ManualActivationPlan",
+    "PACK_KINDS",
+    "PYTHON_SOURCE_FORMAT",
+    "PackDefinition",
+    "PackLoader",
+    "PackResolver",
+]
 
 _APPLICATION_HOOK_NAMES = ("onApplicationCreate", "onApplicationLoad", "onApplicationRun")
+
+PACK_KINDS = frozenset({"appPack", "modPack"})
+PYTHON_SOURCE_FORMAT = "python-source@1"
+JS_MODULE_FORMAT = "js-module-source@1"
+CODE_ENTRY_FORMATS = frozenset({PYTHON_SOURCE_FORMAT, JS_MODULE_FORMAT})
+CODE_ENTRY_ROLES = frozenset({"main", "library"})
+JS_SOURCE_LIMIT = 1024 * 1024
+_CODE_ENTRY_KEYS = frozenset({"id", "source", "format", "role"})
+_FORMAT_SUFFIXES = {PYTHON_SOURCE_FORMAT: (".py",), JS_MODULE_FORMAT: (".mjs",)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +50,26 @@ class CodeEntryDefinition:
     """Names one declared source entry within its owning Pack root."""
     codeEntryId: str
     source: str
+    format: str = PYTHON_SOURCE_FORMAT
+    role: str = "main"
+
+
+@dataclass(frozen=True, slots=True)
+class DeclaredSourceEntry:
+    """Immutable record of a non-executed CodeEntry, holding exactly the hashed bytes.
+
+    Python never executes these entries. They are recorded at activation so
+    a frontend host can serve the same bytes whose identity was established.
+    """
+    packId: str
+    packVersion: str
+    codeEntryId: str
+    format: str
+    role: str
+    source: str
+    sourceBytes: bytes
+    sourceSha256: str
+    implementationId: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +126,8 @@ class PackResolver:
         kind = manifest.get("kind")
         if type(kind) is not str or not kind:
             raise ValueError(f"Pack {packId!r} requires a non-empty string kind.")
+        if kind not in PACK_KINDS:
+            raise ValueError(f"Pack {packId!r} has unknown kind {kind!r}; expected 'appPack' or 'modPack'.")
         version = manifest.get("version")
         if type(version) is not str or not version:
             raise ValueError(f"Pack {packId!r} requires a non-empty string version.")
@@ -96,17 +138,37 @@ class PackResolver:
 
         entries: list[CodeEntryDefinition] = []
         seenEntryIds: set[str] = set()
+        mainFormats: set[str] = set()
         for item in entriesSource:
             if not isinstance(item, dict) or type(item.get("id")) is not str or type(item.get("source")) is not str:
                 raise ValueError(f"Pack {packId!r} has an invalid CodeEntry declaration.")
+            unknownKeys = set(item) - _CODE_ENTRY_KEYS
+            if unknownKeys:
+                names = ", ".join(sorted(map(str, unknownKeys)))
+                raise ValueError(f"Pack {packId!r} CodeEntry declares unknown key(s): {names}.")
             entryId = item["id"]
             source = item["source"]
             if not entryId or not source:
                 raise ValueError(f"Pack {packId!r} CodeEntry id/source must not be blank.")
             if entryId in seenEntryIds:
                 raise ValueError(f"Pack {packId!r} declares duplicate CodeEntry id {entryId!r}.")
+            entryFormat = item.get("format", PYTHON_SOURCE_FORMAT)
+            if type(entryFormat) is not str or entryFormat not in CODE_ENTRY_FORMATS:
+                raise ValueError(f"Pack {packId!r} CodeEntry {entryId!r} has unsupported format {entryFormat!r}.")
+            role = item.get("role", "main")
+            if type(role) is not str or role not in CODE_ENTRY_ROLES:
+                raise ValueError(f"Pack {packId!r} CodeEntry {entryId!r} has invalid role {role!r}.")
+            if role == "library" and entryFormat == PYTHON_SOURCE_FORMAT:
+                raise ValueError(
+                    f"Pack {packId!r} CodeEntry {entryId!r}: python-source@1 library entries "
+                    "are not supported yet.",
+                )
+            if role == "main":
+                if entryFormat in mainFormats:
+                    raise ValueError(f"Pack {packId!r} declares more than one main {entryFormat} CodeEntry.")
+                mainFormats.add(entryFormat)
             seenEntryIds.add(entryId)
-            entries.append(CodeEntryDefinition(codeEntryId=entryId, source=source))
+            entries.append(CodeEntryDefinition(codeEntryId=entryId, source=source, format=entryFormat, role=role))
 
         return PackDefinition(
             packId=packId,
@@ -166,6 +228,7 @@ class _LoadedPack:
     pack: PackDefinition
     entries: tuple[_LoadedCodeEntry, ...]
     registrationScope: RegistrationScope
+    declared: tuple[DeclaredSourceEntry, ...] = ()
 
 
 class PackLoader:
@@ -239,9 +302,13 @@ class PackLoader:
         entries: list[_LoadedCodeEntry] = []
         loadedModules: list[ModuleType] = []
         registeredOwners: list[str] = []
+        declared: list[DeclaredSourceEntry] = []
 
         try:
             for definition in pack.codeEntries:
+                if definition.format != PYTHON_SOURCE_FORMAT:
+                    declared.append(self._declareSource(pack=pack, definition=definition))
+                    continue
                 instanceId = newRuntimeId()
                 module, sourceSha256, implementationId = self._loadModule(
                     pack=pack,
@@ -268,7 +335,7 @@ class PackLoader:
                     codeEntryId=definition.codeEntryId,
                     codeEntryInstanceId=instanceId,
                     sourceSha256=sourceSha256,
-                    implementationFormat="python-source@1",
+                    implementationFormat=PYTHON_SOURCE_FORMAT,
                     implementationId=implementationId,
                 )
 
@@ -317,13 +384,27 @@ class PackLoader:
                 ) from None
             raise
 
-        self._loadedPacks.append(_LoadedPack(pack=pack, entries=tuple(entries), registrationScope=scope))
+        self._loadedPacks.append(
+            _LoadedPack(pack=pack, entries=tuple(entries), registrationScope=scope, declared=tuple(declared)),
+        )
         self._runtime.trace(
             "pack-activation-completed",
             attributes={
                 "packId": pack.packId,
                 "codeEntryInstanceIds": [item.identity.codeEntryInstanceId for item in entries],
+                "declaredEntryIds": [item.codeEntryId for item in declared],
             },
+        )
+
+    def declaredEntries(self, entryFormat: str) -> tuple[DeclaredSourceEntry, ...]:
+        """Returns recorded non-executed entries of one format over active Packs, in activation order."""
+        if type(entryFormat) is not str or entryFormat not in CODE_ENTRY_FORMATS:
+            raise ValueError(f"Unsupported CodeEntry format: {entryFormat!r}.")
+        return tuple(
+            item
+            for loadedPack in self._loadedPacks
+            for item in loadedPack.declared
+            if item.format == entryFormat
         )
 
     def invokeApplicationCreate(self, *, memoryView: CommittedValueTransaction) -> None:
@@ -451,6 +532,54 @@ class PackLoader:
         return errors
 
     @staticmethod
+    def _readSource(*, pack: PackDefinition, definition: CodeEntryDefinition) -> tuple[bytes, str, str]:
+        """Reads one contained source and derives its format-qualified implementation identity."""
+        packRoot = pack.root.resolve()
+        sourcePath = (packRoot / definition.source).resolve()
+        if not sourcePath.is_relative_to(packRoot):
+            raise ValueError(
+                f"CodeEntry source escapes Pack root for {pack.packId!r}/{definition.codeEntryId!r}: {definition.source!r}.",
+            )
+        if not sourcePath.is_file():
+            raise FileNotFoundError(f"CodeEntry source does not exist: {sourcePath}.")
+        suffixes = _FORMAT_SUFFIXES[definition.format]
+        if sourcePath.suffix not in suffixes:
+            label = "Python" if definition.format == PYTHON_SOURCE_FORMAT else definition.format
+            raise ValueError(f"{label} CodeEntry source must use a {'/'.join(suffixes)} file: {sourcePath}.")
+        if definition.format != PYTHON_SOURCE_FORMAT and sourcePath.stat().st_size > JS_SOURCE_LIMIT:
+            raise ValueError(f"CodeEntry source exceeds {JS_SOURCE_LIMIT} bytes: {sourcePath}.")
+
+        try:
+            sourceBytes = sourcePath.read_bytes()
+        except OSError as err:
+            raise RuntimeError(f"Could not read CodeEntry source: {sourcePath}.") from err
+        if definition.format != PYTHON_SOURCE_FORMAT and len(sourceBytes) > JS_SOURCE_LIMIT:
+            raise ValueError(f"CodeEntry source exceeds {JS_SOURCE_LIMIT} bytes: {sourcePath}.")
+        sourceSha256 = hashlib.sha256(sourceBytes).hexdigest()
+        identityMaterial = (
+            f"{definition.format}\0{pack.packId}\0{pack.version}\0"
+            f"{definition.codeEntryId}\0{definition.source}\0{sourceSha256}"
+        ).encode("utf-8")
+        implementationId = hashlib.sha256(identityMaterial).hexdigest()
+        return sourceBytes, sourceSha256, implementationId
+
+    @staticmethod
+    def _declareSource(*, pack: PackDefinition, definition: CodeEntryDefinition) -> DeclaredSourceEntry:
+        """Records a non-Python CodeEntry without executing it."""
+        sourceBytes, sourceSha256, implementationId = PackLoader._readSource(pack=pack, definition=definition)
+        return DeclaredSourceEntry(
+            packId=pack.packId,
+            packVersion=pack.version,
+            codeEntryId=definition.codeEntryId,
+            format=definition.format,
+            role=definition.role,
+            source=definition.source,
+            sourceBytes=sourceBytes,
+            sourceSha256=sourceSha256,
+            implementationId=implementationId,
+        )
+
+    @staticmethod
     def _loadModule(
         *,
         pack: PackDefinition,
@@ -465,27 +594,8 @@ class PackLoader:
         materialization can widen the implementation closure without changing
         the producer-metadata contract consumed by persistent values.
         """
-        packRoot = pack.root.resolve()
-        sourcePath = (packRoot / definition.source).resolve()
-        if not sourcePath.is_relative_to(packRoot):
-            raise ValueError(
-                f"CodeEntry source escapes Pack root for {pack.packId!r}/{definition.codeEntryId!r}: {definition.source!r}.",
-            )
-        if not sourcePath.is_file():
-            raise FileNotFoundError(f"CodeEntry source does not exist: {sourcePath}.")
-        if sourcePath.suffix != ".py":
-            raise ValueError(f"Python CodeEntry source must use a .py file: {sourcePath}.")
-
-        try:
-            sourceBytes = sourcePath.read_bytes()
-        except OSError as err:
-            raise RuntimeError(f"Could not read CodeEntry source: {sourcePath}.") from err
-        sourceSha256 = hashlib.sha256(sourceBytes).hexdigest()
-        identityMaterial = (
-            f"python-source@1\0{pack.packId}\0{pack.version}\0"
-            f"{definition.codeEntryId}\0{definition.source}\0{sourceSha256}"
-        ).encode("utf-8")
-        implementationId = hashlib.sha256(identityMaterial).hexdigest()
+        sourceBytes, sourceSha256, implementationId = PackLoader._readSource(pack=pack, definition=definition)
+        sourcePath = (pack.root.resolve() / definition.source).resolve()
 
         moduleName = (
             f"_tertalis_{pack.packId.replace('.', '_')}_"

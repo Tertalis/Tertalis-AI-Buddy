@@ -1,9 +1,9 @@
 # AI agent entry point — Tertalis AI Buddy
 
-This is an unimplemented application workstream that contains a complete
-pinned Tertalis platform snapshot. Do **not** describe the repository as a
-working AI buddy, invent a startup command, or treat copied coordination
-files as independent authority.
+This repository contains the experimental AI Buddy AppPack, terminal launcher,
+application tests and a complete pinned Tertalis platform source snapshot.
+The adopted platform SHA is recorded in README.md. Do not treat platform
+frontend availability as completed AI Buddy browser UI integration.
 
 ## Read before working
 
@@ -24,8 +24,9 @@ files as independent authority.
 
 ## Ownership and compatibility
 
-- AI Buddy owns its own prospective application behavior; no AI Buddy
-  AppPack has yet been materialized.
+- AI Buddy owns first-party/applications/aiBuddy/ and its application tests
+  under tests/first_party/applications/aiBuddy/. The AppPack and terminal
+  launcher are implemented; the application README documents their behavior.
 - Tertalis owns the shared `backend/`, reusable `first-party/`
   facilities and platform-facing guarantees.
 - Reusable gaps discovered by application work are routed to the
@@ -48,9 +49,11 @@ From the repository root on Windows:
 .\python-embedded\python.exe -X frozen_modules=off -m pytest tests
 ```
 
-These commands prepare and test the **platform checkout**, not an AI Buddy
-implementation. Root setup must never be modified to discover and initialize
-applications. There is no separate AI Buddy setup/launcher yet.
+Root setup prepares platform internals only; pytest tests exercises both
+platform and AI Buddy tests. Root setup must never discover or initialize
+applications. Run AI Buddy with first-party/applications/aiBuddy/run.bat
+after starting an external llama-server; see the application README.
+AI Buddy requires Python 3.15.
 Report the exact refs, actual tests performed and unverified conditions.
 Follow the canonical coordination handoff/completion protocol.
 

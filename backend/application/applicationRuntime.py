@@ -1,4 +1,4 @@
-# file: backend/application/applicationRuntime.py ; version: 24
+# file: backend/application/applicationRuntime.py ; version: 25
 from __future__ import annotations
 
 from contextlib import suppress
@@ -516,6 +516,7 @@ class ApplicationRuntime:
             ),
             allowRegistration=allowRegistration,
             cancellationSignal=cancellationSignal,
+            declaredEntries=self.packLoader.declaredEntries,
         )
         contextReference = context
         return context
